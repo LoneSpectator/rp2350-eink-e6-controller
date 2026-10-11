@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "firmware"))
 from epaper import Epaper, FRAME_BYTES
 from rtc import PCF85063
 from app import shut_down
+from activity_led import ActivityIndicator
 
 
 class I2C:
@@ -112,12 +113,23 @@ class EpaperTests(unittest.TestCase):
         self.cs, self.dc, self.reset, self.power = Pin(), Pin(), Pin(), Pin(0)
         self.busy = Busy(self.clock)
         self.spi = SPI(self.dc, self.busy)
+        self.activity_pin = Pin(0)
+        self.activity = ActivityIndicator(self.activity_pin, clock=self.clock)
         self.screen = Epaper(self.spi, self.cs, self.dc, self.reset, self.busy, self.power,
-                             timeout_ms=1000, clock=self.clock)
+                             timeout_ms=1000, clock=self.clock, activity=self.activity)
 
     def test_frame_transfer_refresh_and_sleep(self):
         frame = bytes((0x01,)) * FRAME_BYTES
         output = io.StringIO()
+        original_sleep = self.clock.sleep_ms
+        def sleep(delay):
+            self.assertTrue(self.activity.refreshing)
+            self.activity.card_begin()  # Logging may read/write during a refresh.
+            self.activity.tick()
+            self.assertEqual(self.activity_pin.value(), 1)
+            self.activity.card_end()
+            original_sleep(delay)
+        self.clock.sleep_ms = sleep
         with contextlib.redirect_stdout(output):
             self.screen.display(frame)
         self.assertIn("[timing] panel_refresh: 300 ms", output.getvalue())
@@ -132,11 +144,14 @@ class EpaperTests(unittest.TestCase):
         self.assertEqual(self.spi.writes[-2:], [(0, b"\x07"), (1, b"\xa5")])
         self.assertEqual(self.power.value(), 0)
         self.assertEqual(self.cs.value(), 1)
+        self.assertEqual(self.activity_pin.value(), 0)
+        self.assertFalse(self.activity.refreshing)
 
     def test_invalid_frame_does_not_power_screen(self):
         with self.assertRaises(ValueError):
             self.screen.display(b"short")
         self.assertEqual(self.power.value(), 0)
+        self.assertEqual(self.activity_pin.value(), 0)
 
     def test_busy_stuck_low_times_out(self):
         self.busy.until = 100000
@@ -154,6 +169,27 @@ class EpaperTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.screen.command(0x10)
         self.assertEqual(self.cs.value(), 1)
+
+    def test_refresh_failure_or_interrupt_extinguishes_act_and_cuts_screen_power(self):
+        for mode in ("spi", "busy", "interrupt"):
+            with self.subTest(mode=mode):
+                if mode == "busy":
+                    self.busy.until = 100000
+                else:
+                    def failure(data):
+                        self.assertTrue(self.activity.refreshing)
+                        self.assertEqual(self.activity_pin.value(), 1)
+                        if mode == "interrupt": raise KeyboardInterrupt
+                        raise OSError("SPI failure")
+                    self.spi.write = failure
+                expected = KeyboardInterrupt if mode == "interrupt" else OSError
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(expected):
+                    self.screen.display(bytes(FRAME_BYTES))
+                self.assertEqual(self.activity_pin.value(), 0)
+                self.assertFalse(self.activity.refreshing)
+                self.assertEqual(self.power.value(), 0)
+                self.assertEqual(self.cs.value(), 1)
+                self.setUp()
 
 
 class ShutdownTests(unittest.TestCase):

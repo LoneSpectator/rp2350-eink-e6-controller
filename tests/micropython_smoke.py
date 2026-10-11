@@ -5,6 +5,8 @@ import sys
 sys.path.insert(0, "firmware")
 from framebuffer import FRAME
 from power_led import PowerIndicator
+from activity_led import ActivityIndicator, IndicatedBlockDevice
+from epaper import Epaper
 from app import Controller, empty_battery_shutdown, load_state, read_config, read_schedule, wake_target
 from calendar_time import from_minutes, to_minutes
 from content import BitmapFont, render_file
@@ -87,6 +89,37 @@ class Indicator:
             self.level = level
         return self.level
 
+class ActivityClock:
+    now = 0
+    def ticks_ms(self): return self.now
+    def ticks_diff(self, now, previous): return now - previous
+
+act_pin, act_clock = Indicator(), ActivityClock()
+act = ActivityIndicator(act_pin, clock=act_clock)
+class Card:
+    def readblocks(self, block, data):
+        assert act.card_depth == 1 and act_pin.value() == 1
+        act_clock.now += 100
+        act.tick()
+        assert act_pin.value() == 0
+        return 0
+    def writeblocks(self, block, data):
+        act.set_refreshing(True)
+        act_clock.now += 100
+        act.tick()
+        assert act_pin.value() == 1
+        return 0
+    def ioctl(self, operation, argument): return 512
+
+card = IndicatedBlockDevice(Card(), act)
+assert card.readblocks(0, bytearray(512)) == 0
+assert act.card_depth == 0 and act_pin.value() == 0
+assert card.writeblocks(0, bytearray(512)) == 0
+assert act.card_depth == 0 and act_pin.value() == 1
+act.set_refreshing(False)
+assert act_pin.value() == 0
+assert card.ioctl(5, 0) == 512
+
 pwr, vbus, charge = Indicator(), Indicator(1), Indicator(0)
 indicator = PowerIndicator(pwr, vbus, charge)
 assert pwr.value() == 1
@@ -131,4 +164,4 @@ except ValueError as exc:
     log.exception("Smoke exception", exc)
 assert os.stat(root + "/logs/debug.log")[6] > 0
 assert os.stat(root + "/logs/warnings.log")[6] > 0
-print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, PWR, logs")
+print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, PWR, ACT, logs")

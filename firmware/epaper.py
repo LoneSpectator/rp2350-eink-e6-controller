@@ -20,11 +20,12 @@ INIT = (
 
 class Epaper:
     def __init__(self, spi, cs, dc, reset, busy, power, timeout_ms=120000,
-                 clock=None):
+                 clock=None, activity=None):
         self.spi, self.cs, self.dc = spi, cs, dc
         self.reset, self.busy, self.power = reset, busy, power
         self.timeout_ms = timeout_ms
         self.clock = clock or time
+        self.activity = activity
         self.cs.value(1)
 
     @classmethod
@@ -33,7 +34,8 @@ class Epaper:
         spi = SPI(1, baudrate=8000000, polarity=0, phase=0,
                   sck=Pin(10), mosi=Pin(11), miso=Pin(28))
         return cls(spi, Pin(9, Pin.OUT, value=1), Pin(8, Pin.OUT),
-                   Pin(12, Pin.OUT, value=1), Pin(13, Pin.IN), board.screen_power)
+                   Pin(12, Pin.OUT, value=1), Pin(13, Pin.IN), board.screen_power,
+                   activity=board.activity_indicator)
 
     def _write(self, data, is_data):
         self.dc.value(is_data)
@@ -79,24 +81,31 @@ class Epaper:
     def display(self, frame):
         if len(frame) != FRAME_BYTES:
             raise ValueError("EPD frame must be exactly 192000 bytes")
-        stage = ticks_ms(self.clock)
-        self.initialize()
-        stage = report("panel_init", stage, self.clock)
-        self.command(0x10)
-        view = memoryview(frame)
-        for offset in range(0, len(view), 4096):
-            self._write(view[offset:offset + 4096], 1)
-        stage = report("frame_upload", stage, self.clock)
-        self.command(0x04)
-        self.wait_idle()
-        self.command(0x06, b"\x6f\x1f\x17\x49")
-        stage = report("panel_power_on", stage, self.clock)
-        self.command(0x12, b"\x00")
-        self.wait_idle(require_busy=True)
-        stage = report("panel_refresh", stage, self.clock)
-        self.command(0x02, b"\x00")
-        self.wait_idle()
-        self.command(0x07, b"\xa5")
-        self.clock.sleep_ms(10)
-        self.power.value(0)
-        report("panel_sleep", stage, self.clock)
+        if self.activity is not None:
+            self.activity.set_refreshing(True)
+        try:
+            stage = ticks_ms(self.clock)
+            self.initialize()
+            stage = report("panel_init", stage, self.clock)
+            self.command(0x10)
+            view = memoryview(frame)
+            for offset in range(0, len(view), 4096):
+                self._write(view[offset:offset + 4096], 1)
+            stage = report("frame_upload", stage, self.clock)
+            self.command(0x04)
+            self.wait_idle()
+            self.command(0x06, b"\x6f\x1f\x17\x49")
+            stage = report("panel_power_on", stage, self.clock)
+            self.command(0x12, b"\x00")
+            self.wait_idle(require_busy=True)
+            stage = report("panel_refresh", stage, self.clock)
+            self.command(0x02, b"\x00")
+            self.wait_idle()
+            self.command(0x07, b"\xa5")
+            self.clock.sleep_ms(10)
+            self.power.value(0)
+            report("panel_sleep", stage, self.clock)
+        finally:
+            self.power.value(0)
+            if self.activity is not None:
+                self.activity.set_refreshing(False)

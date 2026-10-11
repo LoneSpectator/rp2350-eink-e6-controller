@@ -15,6 +15,8 @@ class Board:
         self.rtc_int = Pin(6, Pin.IN, Pin.PULL_UP)
         self.charging = Pin(17, Pin.IN, Pin.PULL_UP)
         self.activity = Pin(25, Pin.OUT, value=0)
+        from activity_led import ActivityIndicator
+        self.activity_indicator = ActivityIndicator.for_hardware(self.activity)
         from power_led import PowerIndicator
         self.power_indicator = power_indicator or PowerIndicator.for_hardware()
         self.power_led = self.power_indicator.pin
@@ -35,14 +37,20 @@ class Board:
 
     def mount_sd(self):
         from sdcard import SDCard
+        from activity_led import IndicatedBlockDevice
         try:
             import vfs
         except ImportError:
             vfs = os
         self.sd_bus = SPI(0, sck=Pin(2), mosi=Pin(3), miso=Pin(4))
-        self.sd = SDCard(self.sd_bus, Pin(5, Pin.OUT, value=1), baudrate=4000000)
-        filesystem = vfs.VfsFat(self.sd)
-        vfs.mount(filesystem, "/sd")
+        self.activity_indicator.card_begin()
+        try:
+            device = SDCard(self.sd_bus, Pin(5, Pin.OUT, value=1), baudrate=4000000)
+            self.sd = IndicatedBlockDevice(device, self.activity_indicator)
+            filesystem = vfs.VfsFat(self.sd)
+            vfs.mount(filesystem, "/sd")
+        finally:
+            self.activity_indicator.card_end()
 
     def sync(self):
         if hasattr(os, "sync"):

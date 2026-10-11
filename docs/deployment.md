@@ -92,7 +92,9 @@ Markdown 语法与六色文字见 [README](../README.md)，可先预览：
 python tools/render_preview.py examples/tf-card /text/notice.md notice-preview.png
 ```
 
-ACT 在内容处理、屏幕传输/刷新期间亮，芯片运行并不必然亮灯。日志中 `fingerprint` 是输入检查，`text_cache` 是缓存读取或重建，`text_render` 只在重建时出现；`panel_init`、`frame_upload`、`panel_power_on`、`panel_refresh`、`panel_sleep` 分别对应屏幕阶段，`display` 是整个驱动过程，不能与内部阶段相加。屏幕驱动维持官方正常全屏波形，像素缓存缩短准备时间。
+ACT 在屏幕初始化、像素传输、BUSY 刷新等待和休眠期间常亮；TF 卡初始化及实际读写时约 5 Hz 闪烁；其余时间熄灭。屏幕更新常亮优先于 TF 卡闪烁，因而刷新期间写日志不会打断常亮。TF 指示接在 VFS 底层块设备，图片、文本、字体、缓存、配置、排程、日志、状态保存及同步都自动覆盖；纯计算与 RTC 操作不会点亮 ACT。短暂读写可能只看到短闪，结束立即熄灭。刷新异常或中断也会熄灯并关闭屏幕供电。
+
+日志中 `fingerprint` 是输入检查，`text_cache` 是缓存读取或重建，`text_render` 只在重建时出现；`panel_init`、`frame_upload`、`panel_power_on`、`panel_refresh`、`panel_sleep` 分别对应屏幕阶段，`display` 是整个驱动过程，不能与内部阶段相加。屏幕驱动维持官方正常全屏波形，像素缓存缩短准备时间。
 
 用户提供的 USB 实机日志中，旧 32×32 字库的 TXT 首次排版约 4.47–5.17 秒、缓存读取约 1.76 秒、屏幕 `panel_refresh` 约 19.09 秒；缓存命中后完整内容切换约 21.76 秒。这些是该设备该次运行的结果，主要耗时已在屏幕刷新阶段；更换原生 64×64 思源黑体后的首次排版耗时需重新实测，缓存命中仍绕过字库读取与绘制。
 
@@ -122,7 +124,7 @@ python -m mpremote connect COM8 reset
 
 ## PWR 指示检查
 
-升级此功能只需上传新版 Python 模块并重启，无需修改 TF 卡配置。PWR（GP26）采用以下逻辑，ACT 的显示任务指示保持原有行为：
+升级指示灯功能只需上传新版 Python 模块并重启，无需修改 TF 卡配置。PWR（GP26）采用以下逻辑：
 
 | 状态 | PWR |
 | --- | --- |
@@ -132,6 +134,6 @@ python -m mpremote connect COM8 reset
 | 已停止固件且未充电或充满 | 熄灭 |
 | 释放电池供电保持之前 | 熄灭 |
 
-状态页的 60 秒由主控单调计时器计算，从刷新完成开始，不通过外部 RTC 唤醒；期间主控保持供电，PWR 常亮，ACT 熄灭。恢复日常画面后，电池模式重新安排外部 RTC 闹钟并关闭主控，此时 PWR 熄灭。USB 排程轮询及禁用电池休眠时的等待也保持 PWR 常亮。
+状态页的 60 秒由主控单调计时器计算，从刷新完成开始，不通过外部 RTC 唤醒；期间主控保持供电，PWR 常亮，ACT 熄灭，发生 TF 卡读写时短闪。恢复日常画面后，电池模式重新安排外部 RTC 闹钟并关闭主控，此时 PWR 熄灭。USB 排程轮询及禁用电池休眠时的等待也保持 PWR 常亮。
 
 充电闪烁只在停止固件后使用后台软定时器。实机检查时，固件运行及软件计时等待应一直常亮；按 Ctrl-C 返回 REPL 后，充电中闪烁，充满后熄灭。信号来自 GP24/GP17；它不用于判断电池是否接入。

@@ -72,10 +72,13 @@ def read_config(root):
 
 
 def read_schedule(root, config):
-    with open(root + relative_file(config["cron"]), "r") as stream:
-        source = stream.read(16385)
-    if len(source) > 16384:
+    path = root + relative_file(config["cron"])
+    size = os.stat(path)[6]
+    if size > 16384:
         raise ValueError("cron file too large")
+    with open(path, "r") as stream:
+        # MicroPython reserves the requested size even for a tiny cron file.
+        source = stream.read(size)
     return Schedule.parse(source)
 
 
@@ -181,7 +184,6 @@ def empty_battery_shutdown(board, rtc, display, buffer, config, voltage, root=No
         rtc.disable_alarm()
     except Exception as exc:
         log.exception("Cannot disable low-battery RTC alarm", exc)
-    board.activity.value(1)
     try:
         from battery_warning import empty_battery_frame
         state = load_state(root) if root is not None else {}
@@ -352,9 +354,7 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 session.pending = False
                 config = read_config(ROOT)
                 log.configure(ROOT, config["logging"], rtc.read_time)
-                board.activity.value(1)
                 show_status(board, rtc, display, buffer, ROOT, config, session)
-                board.activity.value(0)
                 continue
             if session.active():
                 if not session.expired():
@@ -372,7 +372,6 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 log.configure(ROOT, config["logging"], rtc.read_time)
                 schedule = read_schedule(ROOT, config)
                 report("load_schedule", started)
-                board.activity.value(1)
                 controller = Controller(ROOT, config, display, buffer)
                 state = load_state(ROOT)
                 fallback = previous_content(state)
@@ -384,9 +383,7 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 # A NEXT press during rendering is latched by its GPIO IRQ.
                 if board.next_button.pressed():
                     session.pending = True
-                    board.activity.value(0)
                     continue
-                board.activity.value(0)
                 # Use time *after* rendering. Reconcile if refresh crossed an event.
                 after = rtc.read_time()
                 if to_seconds(after) // 60 != minute:
