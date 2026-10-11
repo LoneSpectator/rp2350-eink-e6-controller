@@ -1,5 +1,5 @@
 {
-    "cron": "/schedule.cron",
+    "cron": "/cron",
     "font": "/fonts/sign.e6f",
     "default": "/text/default.txt",
     "rotation": 180,

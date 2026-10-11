@@ -22,12 +22,14 @@
 - 同分钟冲突时最后一行优先。过去/未来查找上限 8 年，RTC 范围 2000..2099 年；无历史事件时使用默认内容或保留旧画面。
 - 文件内容和显示配置一致就跳过刷新，即使新事件再次指定同一内容。卡片修改在下一次唤醒/分钟检查时读取，不会主动唤醒已关机的主控。
 
+快速测试用 [examples/fast-switch/cron](examples/fast-switch/cron)：每分钟依次切换营业 TXT、休息 TXT、彩色 Markdown 和 E6 图片，四分钟一轮。使用 `examples/tf-card/` 中的字体和素材，把测试文件复制到 TF 根目录，命名为 `cron`，确认 `config.json` 设置 `"cron": "/cron"`，再重启即可。cron 最小时间单位为一分钟。
+
 ## TF 卡示例
 
 将 `examples/tf-card/` 内容复制到 FAT32 卡根目录：
 
 ```text
-schedule.cron
+cron
 config.json
 fonts/sign.e6f
 text/default.txt
@@ -113,7 +115,7 @@ TXT 和 Markdown 第一次显示时，设备在**源文件同一目录**生成�
 
 ```sh
 # 检查当前与下一事件
-python tools/check_schedule.py examples/tf-card/schedule.cron --at 2026-10-11T12:00:00
+python tools/check_schedule.py examples/tf-card/cron --at 2026-10-11T12:00:00
 # 照片可增加 --dither；标识和文字通常不用
 python tools/prepare_image.py photo.jpg notice.e6
 python tools/prepare_image.py photo.jpg notice.bmp --dither

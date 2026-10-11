@@ -148,7 +148,7 @@ class BatteryTests(unittest.TestCase):
                 root = Path(temporary)
                 config = {"low_battery_voltage": 3.3, "rotation": 0}
                 (root / "config.json").write_text(json.dumps(config))
-                (root / "schedule.cron").write_text("* * * * * /a.e6")
+                (root / "cron").write_text("* * * * * /a.e6")
                 (root / "a.e6").write_bytes(
                     struct.pack("<4sHHI4x", b"E6P1", 800, 480, 192000) + b"\x55" * 192000)
                 frames, events = [], []

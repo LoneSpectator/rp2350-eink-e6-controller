@@ -189,7 +189,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(display.count, 1)
 
     def test_invalid_configuration(self):
-        for config in ({"retry_minutes": 0}, {"cron": "../schedule.cron"},
+        for config in ({"retry_minutes": 0}, {"cron": "../cron"},
                        {"rotation": 90}, {"battery_sleep": "true"}, {"unknown": 1}):
             (self.root / "config.json").write_text(json.dumps(config))
             with self.assertRaises(ValueError):

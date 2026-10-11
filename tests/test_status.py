@@ -102,7 +102,7 @@ class StatusTests(unittest.TestCase):
                 shutil.copyfile(source / "fonts/sign.e6f", root / "fonts/sign.e6f")
                 (root / "a.txt").write_text("OPEN 营业中", encoding="utf-8")
                 (root / "b.txt").write_text("CLOSED 已结束", encoding="utf-8")
-                (root / "schedule.cron").write_text("0 9 * * * /a.txt\n1 9 * * * /b.txt")
+                (root / "cron").write_text("0 9 * * * /a.txt\n1 9 * * * /b.txt")
                 settings = {"rotation": 0, "text": {"scale": 1}, "logging": {"debug": True}}
                 (root / "config.json").write_text(json.dumps(settings))
                 clock = Clock()

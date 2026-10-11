@@ -26,11 +26,11 @@ Windows 的 `zoneinfo` 需要 `tzdata` 提供 IANA 时区数据库，已包含�
 ## TF 卡与程序上传
 
 1. 使用 **FAT32** TF 卡；先备份，格式化不是程序自动执行的操作。本项目不假定 MicroPython 支持官方 C 示例的 exFAT 配置。
-2. 将 `examples/tf-card/` 的**内容**复制到 TF 卡根目录，保留 `fonts/`、`text/`、`pic/` 目录及 `schedule.cron`、`config.json`。
+2. 将 `examples/tf-card/` 的**内容**复制到 TF 卡根目录，保留 `fonts/`、`text/`、`pic/` 目录及 `cron`、`config.json`。
 3. 用电脑调整排程并检查：
 
 ```sh
-python tools/check_schedule.py examples/tf-card/schedule.cron --at 2026-10-11T12:00:00
+python tools/check_schedule.py examples/tf-card/cron --at 2026-10-11T12:00:00
 python -m mpremote connect list
 python tools/deploy.py --port auto
 python tools/set_time.py --port auto --timezone Asia/Shanghai
@@ -42,6 +42,8 @@ python -m mpremote connect auto reset
 已有设备升级时保留 TF 卡现有排程和素材，执行 `git pull`、`python tools/deploy.py --port COM8`、`python -m mpremote connect COM8 reset`。有效 RTC 无需重新校时。旧配置缺少新字段时采用默认值：`status_seconds=60`，长期警告日志开启、详细文件调试日志关闭。需要 Markdown 演示时，只复制 `text/notice.md`，再将它的路径加入自己的排程。
 
 本次思源黑体升级还需把仓库中的 `examples/tf-card/fonts/sign.e6f`（约 11 MB）及同目录 `OFL.txt` 复制到 TF 卡的 `fonts/`，替换旧字库，并将卡上 `config.json` 的 `text.scale` 改为 **1**，其余个人设置保持原值。字体不上传至 Pico 内部闪存；`deploy.py` 只上传 Python 模块。字库大小改变会自动重建 TXT/Markdown 像素缓存。示例 `notice.md` 和 `pic/weekend.e6` 也已重新排版生成。
+
+排程文件统一命名为 **`cron`**，没有扩展名。已有 TF 卡需将旧排程文件重命名为 `cron`，并把 `config.json` 中的 `cron` 设置改为 `"/cron"`，保留原排程内容，再上传新版程序并重启。
 
 RTC 保存当地民用时间，cron 与它使用相同时间。默认校时为北京时间；换时区时调整 `--timezone`，夏令时地区需重新校时，设备没有网络校时服务。USB 握手可能带来几秒校时误差，需精确到秒时可在连接后的 REPL 直接校准。
 
@@ -79,6 +81,8 @@ PCF85063 闹钟只比较日/时/分/秒，不能比较月/年。远期排程默�
 USB 常供电时主控保持运行，约每 100 ms 观察按键和时间、每个新分钟读取配置和内容。显示仍需完成屏幕全屏刷新；刷新跨过新排程时，程序再次检查并更新至最新内容。
 
 ## 缓存、Markdown 和耗时
+
+需要快速验证时，把 [examples/fast-switch/cron](../examples/fast-switch/cron) 复制到 TF 根目录替换 `cron`，保留原排程副本，并确认配置为 `"cron": "/cron"`。该样本每分钟切换一次营业 TXT、休息 TXT、彩色 Markdown、E6 图片，四分钟一轮；使用仓库自带的 `fonts/`、`text/`、`pic/` 素材。重启后立即显示当前分钟对应内容，之后按整分钟切换。
 
 保持你当前两条 TXT 排程，分别显示一遍后，TF 卡上应出现 `text/open.txt.e6cache`、`text/closed.txt.e6cache`，每份 192,076 字节。后续串口应输出 `Text cache hit`，不再出现 `text_render`。源文件、排版、方向或字库大小/修改时间变化时输出 `Text cache rebuild`。删除缓存可以强制重建；更新字库时若保留了原大小及时间戳，也需要删除缓存。
 

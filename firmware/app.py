@@ -13,7 +13,7 @@ from timing import report, ticks_ms
 
 ROOT = "/sd"
 DEFAULTS = {
-    "cron": "/schedule.cron", "font": "/fonts/sign.e6f",
+    "cron": "/cron", "font": "/fonts/sign.e6f",
     "default": "/text/default.txt", "rotation": 180,
     "battery_sleep": True, "wake_checkpoint_minutes": 360,
     "retry_minutes": 5, "low_battery_voltage": 3.1,
@@ -75,7 +75,7 @@ def read_schedule(root, config):
     with open(root + relative_file(config["cron"]), "r") as stream:
         source = stream.read(16385)
     if len(source) > 16384:
-        raise ValueError("schedule.cron too large")
+        raise ValueError("cron file too large")
     return Schedule.parse(source)
 
 

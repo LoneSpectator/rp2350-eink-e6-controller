@@ -1,0 +1,9 @@
+# 快速切换测试：复制本文件到 TF 卡根目录，文件名保持 cron。
+# config.json 设置 "cron": "/cron"；素材和字体使用 examples/tf-card/。
+# 每分钟切换一次，四分钟一轮。例：09:00 营业，09:01 休息，
+# 09:02 彩色 Markdown，09:03 E6 图片，09:04 再次营业。
+# 重启后立即显示当前分钟对应内容，不必等待第一条排程。
+*/4 * * * * /text/open.txt
+1-59/4 * * * * /text/closed.txt
+2-59/4 * * * * /text/notice.md
+3-59/4 * * * * /pic/weekend.e6
