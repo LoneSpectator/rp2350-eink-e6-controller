@@ -1,0 +1,5 @@
+# Host-only asset preparation and USB deployment; never install these on Pico.
+Pillow==11.3.0
+mpremote==1.26.0
+platformdirs==4.13.0
+pyserial==3.5
