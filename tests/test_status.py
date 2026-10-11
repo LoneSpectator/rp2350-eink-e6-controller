@@ -15,6 +15,7 @@ import sign_log
 from calendar_time import from_seconds, to_seconds
 from content import render_file
 from status_page import NextButton, StatusSession, estimate_charge, status_text
+from power_led import PowerIndicator
 
 
 class Clock:
@@ -112,6 +113,9 @@ class StatusTests(unittest.TestCase):
                     i2c = None
                     next_button = types.SimpleNamespace(pressed=lambda: False)
                     off_times = []
+                    def __init__(self):
+                        self.power_indicator = PowerIndicator(Pin(0), Pin(int(usb)), Pin(int(not usb)))
+                    def set_working(self, working): self.power_indicator.set_working(working)
                     def usb(self): return usb
                     def battery_voltage(self): return 3.75
                     def mount_sd(self): pass
@@ -130,6 +134,10 @@ class StatusTests(unittest.TestCase):
                     frames = []
                     first_completed = None
                     def display(self, frame):
+                        self.assert_working = board.power_indicator.working
+                        self.assert_lit = board.power_indicator.pin.value() == 1
+                        if not self.assert_working or not self.assert_lit:
+                            raise AssertionError("PWR must be steady on during status and restoration")
                         self.frames.append(bytes(frame))
                         clock.now += 300
                         if len(self.frames) == 1:
@@ -138,6 +146,17 @@ class StatusTests(unittest.TestCase):
                             self.assert_restored = clock.now >= self.first_completed + 60000
                             clock.stop = True
                 display = Display()
+                waiting_levels = []
+                original_sleep = clock.sleep_ms
+                def sleep(delay):
+                    before = clock.now // 500
+                    original_sleep(delay)
+                    for _ in range(clock.now // 500 - before):
+                        board.power_indicator.tick()
+                    if display.first_completed is not None:
+                        self.assertFalse(board.power_indicator.working)
+                        waiting_levels.append(board.power_indicator.pin.value())
+                clock.sleep_ms = sleep
                 modules = {"board": types.SimpleNamespace(Board=lambda: board),
                            "rtc": types.SimpleNamespace(PCF85063=RTC),
                            "epaper": types.SimpleNamespace(Epaper=types.SimpleNamespace(for_board=lambda b: display))}
@@ -153,9 +172,11 @@ class StatusTests(unittest.TestCase):
                 self.assertEqual(app.load_state(temporary)["path"], "/b.txt")
                 if usb:
                     self.assertEqual(board.off_times, [])
+                    self.assertEqual(set(waiting_levels), {0, 1})
                 else:
                     self.assertEqual(len(board.off_times), 1)
                     self.assertGreaterEqual(board.off_times[0], display.first_completed + 60000)
+                    self.assertEqual(set(waiting_levels), {0})
 
     def test_transient_state_forces_same_path_restoration_and_remembers_prior_file(self):
         from test_content import Display, tiny_font

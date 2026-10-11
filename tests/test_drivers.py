@@ -160,6 +160,7 @@ class ShutdownTests(unittest.TestCase):
     def test_next_press_before_cutoff_keeps_power_for_status(self):
         class Board:
             rtc_int = Pin(1)
+            def set_working(self, working): pass
             class next_button:
                 @staticmethod
                 def pressed(): return True
@@ -174,6 +175,7 @@ class ShutdownTests(unittest.TestCase):
     def test_never_power_off_on_past_alarm_or_low_int(self):
         class Board:
             rtc_int = Pin(0)
+            def set_working(self, working): pass
             def usb(self): return False
             def sync(self): pass
             def power_off(self): raise AssertionError("unsafe power-off")

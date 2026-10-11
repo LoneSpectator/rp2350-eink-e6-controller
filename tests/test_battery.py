@@ -94,6 +94,7 @@ class BatteryTests(unittest.TestCase):
             frame = bytearray(192000)
             class Board:
                 activity, screen_power = Pin(0), Pin(0)
+                def set_working(self, working): pass
                 def usb(self): return False
                 def power_off(self): events.append("power-off")
             rtc = types.SimpleNamespace(disable_alarm=lambda: events.append("disable-alarm"))
@@ -130,7 +131,7 @@ class BatteryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()):
             off = []
             board = types.SimpleNamespace(usb=lambda: False, activity=Pin(0), screen_power=Pin(0),
-                                          power_off=lambda: off.append(True))
+                                          power_off=lambda: off.append(True), set_working=lambda working: None)
             def failure(*args): raise OSError("hardware unavailable")
             rtc = types.SimpleNamespace(disable_alarm=failure)
             display = types.SimpleNamespace(display=failure)
@@ -157,6 +158,7 @@ class BatteryTests(unittest.TestCase):
                     activity, screen_power, rtc_int = Pin(0), Pin(0), Pin(1)
                     i2c = None
                     next_button = types.SimpleNamespace(pressed=lambda: False)
+                    def set_working(self, working): pass
                     def usb(self): return False
                     def battery_voltage(self): return voltage[0]
                     def mount_sd(self):

@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, "firmware")
 from framebuffer import FRAME
+from power_led import PowerIndicator
 from app import Controller, empty_battery_shutdown, load_state, read_config, read_schedule, wake_target
 from calendar_time import from_minutes, to_minutes
 from content import BitmapFont, render_file
@@ -79,15 +80,36 @@ text_cache.render_file = render
 assert overlay_low_battery(FRAME, 180) is FRAME
 assert empty_battery_frame(FRAME, 180) is FRAME
 class Indicator:
-    def value(self, level):
+    def __init__(self, level=0):
         self.level = level
+    def value(self, level=None):
+        if level is not None:
+            self.level = level
+        return self.level
+
+pwr, vbus, charge = Indicator(), Indicator(1), Indicator(0)
+indicator = PowerIndicator(pwr, vbus, charge)
+assert pwr.value() == 1
+indicator.set_working(False)
+assert pwr.value() == 1
+indicator.tick()
+assert pwr.value() == 0
+indicator.set_working(True)
+indicator.tick()
+assert pwr.value() == 1
+indicator.set_working(False)
+charge.value(1)
+indicator.tick()
+assert pwr.value() == 0
 
 class EmptyBoard:
     activity, screen_power = Indicator(), Indicator()
     offs = 0
+    def set_working(self, working): indicator.set_working(working)
     def usb(self): return False
     def power_off(self):
         assert self.screen_power.level == self.activity.level == 0
+        assert not indicator.working and pwr.value() == 0
         assert load_state(root)["digest"] == "shown-180"
         self.offs += 1
 
@@ -109,4 +131,4 @@ except ValueError as exc:
     log.exception("Smoke exception", exc)
 assert os.stat(root + "/logs/debug.log")[6] > 0
 assert os.stat(root + "/logs/warnings.log")[6] > 0
-print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, logs")
+print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, PWR, logs")

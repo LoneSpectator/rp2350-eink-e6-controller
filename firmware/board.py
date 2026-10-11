@@ -5,7 +5,7 @@ from machine import ADC, I2C, Pin, SPI
 
 
 class Board:
-    def __init__(self):
+    def __init__(self, power_indicator=None):
         self.hold = Pin(18, Pin.OUT, value=1)
         self.screen_power = Pin(16, Pin.OUT, value=0)
         self.vbus = Pin(24, Pin.IN)
@@ -15,7 +15,10 @@ class Board:
         self.rtc_int = Pin(6, Pin.IN, Pin.PULL_UP)
         self.charging = Pin(17, Pin.IN, Pin.PULL_UP)
         self.activity = Pin(25, Pin.OUT, value=0)
-        self.power_led = Pin(26, Pin.OUT, value=0)
+        from power_led import PowerIndicator
+        self.power_indicator = power_indicator or PowerIndicator.for_hardware()
+        self.power_led = self.power_indicator.pin
+        self.set_working(True)
         self.adc = ADC(29)
         self.i2c = I2C(1, sda=Pin(14), scl=Pin(15), freq=100000)
         self.sd_bus = None
@@ -23,6 +26,9 @@ class Board:
 
     def usb(self):
         return bool(self.vbus.value())
+
+    def set_working(self, working):
+        self.power_indicator.set_working(working)
 
     def battery_voltage(self):
         return self.adc.read_u16() * 3.3 * 3 / 65535
@@ -48,6 +54,7 @@ class Board:
         self.sync()
         self.screen_power.value(0)
         self.activity.value(0)
+        self.set_working(False)
         self.power_led.value(0)
         self.hold.value(0)
         time.sleep_ms(500)
