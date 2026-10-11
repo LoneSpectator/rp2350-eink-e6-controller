@@ -3,3 +3,5 @@ Pillow==11.3.0
 mpremote==1.26.0
 platformdirs==4.13.0
 pyserial==3.5
+# Windows has no system IANA timezone database; ZoneInfo falls back to this package.
+tzdata==2025.2

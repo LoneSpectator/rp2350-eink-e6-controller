@@ -21,6 +21,8 @@ python -m pip install -r requirements-dev.txt
 
 Windows 使用 `.venv\Scripts\activate`。设备端只运行 MicroPython，不需要安装 Pillow、mpremote 或这些电脑工具。
 
+Windows 的 `zoneinfo` 需要 `tzdata` 提供 IANA 时区数据库，已包含在依赖清单中。若已有虚拟环境出现 `No module named 'tzdata'` 或 `No time zone found with key Asia/Shanghai`，重新运行 `python -m pip install -r requirements-dev.txt` 后再校时。
+
 ## TF 卡与程序上传
 
 1. 使用 **FAT32** TF 卡；先备份，格式化不是程序自动执行的操作。本项目不假定 MicroPython 支持官方 C 示例的 exFAT 配置。
