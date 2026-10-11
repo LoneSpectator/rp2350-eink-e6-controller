@@ -121,6 +121,9 @@ class StatusTests(unittest.TestCase):
                     def mount_sd(self): pass
                     def sync(self): pass
                     def power_off(self):
+                        self.set_working(False)
+                        if self.power_indicator.pin.value() != 0:
+                            raise AssertionError("PWR must be off before RTC power-off")
                         self.off_times.append(clock.now)
                         raise KeyboardInterrupt
                 board = Board()
@@ -154,7 +157,7 @@ class StatusTests(unittest.TestCase):
                     for _ in range(clock.now // 500 - before):
                         board.power_indicator.tick()
                     if display.first_completed is not None:
-                        self.assertFalse(board.power_indicator.working)
+                        self.assertTrue(board.power_indicator.working)
                         waiting_levels.append(board.power_indicator.pin.value())
                 clock.sleep_ms = sleep
                 modules = {"board": types.SimpleNamespace(Board=lambda: board),
@@ -170,13 +173,12 @@ class StatusTests(unittest.TestCase):
                                        settings["text"], rotation=0)
                 self.assertEqual(display.frames[1], expected)
                 self.assertEqual(app.load_state(temporary)["path"], "/b.txt")
+                self.assertEqual(set(waiting_levels), {1})
                 if usb:
                     self.assertEqual(board.off_times, [])
-                    self.assertEqual(set(waiting_levels), {0, 1})
                 else:
                     self.assertEqual(len(board.off_times), 1)
                     self.assertGreaterEqual(board.off_times[0], display.first_completed + 60000)
-                    self.assertEqual(set(waiting_levels), {0})
 
     def test_transient_state_forces_same_path_restoration_and_remembers_prior_file(self):
         from test_content import Display, tiny_font

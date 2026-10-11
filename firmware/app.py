@@ -277,7 +277,6 @@ def shut_down(board, rtc, target):
     board.sync()
     log.info("RTC wake:", target)
     if board.usb():
-        board.set_working(False)
         return
     # Long font/image processing may cross the target. Do not power off with
     # an already-latched alarm or a time that has already passed.
@@ -356,11 +355,10 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 board.activity.value(1)
                 show_status(board, rtc, display, buffer, ROOT, config, session)
                 board.activity.value(0)
-                board.set_working(False)
                 continue
             if session.active():
                 if not session.expired():
-                    board.set_working(False)
+                    # The MCU remains powered and counts this wait itself.
                     time.sleep_ms(100)
                     continue
                 session.finish()
@@ -387,14 +385,12 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 if board.next_button.pressed():
                     session.pending = True
                     board.activity.value(0)
-                    board.set_working(False)
                     continue
                 board.activity.value(0)
                 # Use time *after* rendering. Reconcile if refresh crossed an event.
                 after = rtc.read_time()
                 if to_seconds(after) // 60 != minute:
                     last_minute = minute
-                    board.set_working(False)
                     continue
                 next_minute = schedule.next_minute(after)
                 if config["battery_sleep"] and not board.usb():
@@ -405,7 +401,6 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 else:
                     rtc.disable_alarm()
                 last_minute = minute
-            board.set_working(False)
             time.sleep_ms(100)
         except KeyboardInterrupt:
             board.screen_power.value(0)
@@ -441,5 +436,4 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                     except Exception as power_error:
                         log.exception("Power-off failed", power_error)
             last_minute = None
-            board.set_working(False)
             time.sleep_ms(1000)

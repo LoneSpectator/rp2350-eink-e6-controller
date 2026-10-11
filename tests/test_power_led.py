@@ -1,13 +1,20 @@
+import contextlib
 import importlib
+import io
+import json
 from pathlib import Path
+import struct
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "firmware"))
 from power_led import PowerIndicator
-from test_status import Pin
+import app
+import sign_log
+from test_status import Clock, Pin
 
 
 class Timer:
@@ -75,6 +82,89 @@ class PowerLedTests(unittest.TestCase):
         self.assertEqual(self.pwr.value(), 1)
         self.timer.fire()
         self.assertEqual(self.pwr.value(), 0)
+
+    def test_running_firmware_keeps_pwr_on_between_schedule_checks(self):
+        for usb in (True, False):
+            with self.subTest(usb=usb), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "config.json").write_text(json.dumps({"battery_sleep": False}))
+                (root / "cron").write_text("* * * * * /a.e6")
+                (root / "a.e6").write_bytes(
+                    struct.pack("<4sHHI4x", b"E6P1", 800, 480, 192000) + b"\x55" * 192000)
+                clock = Clock()
+                self.vbus.value(int(usb))
+                indicator = self.indicator
+                board = types.SimpleNamespace(
+                    i2c=None, activity=Pin(0), screen_power=Pin(0), rtc_int=Pin(1),
+                    next_button=types.SimpleNamespace(pressed=lambda: False),
+                    usb=lambda: usb, battery_voltage=lambda: 3.75, mount_sd=lambda: None,
+                    set_working=indicator.set_working)
+                displays, reads, waits = [], [], []
+                rtc = types.SimpleNamespace(
+                    read_time=lambda: reads.append(clock.now) or (2026, 10, 11, 9, clock.now // 60000, 0),
+                    disable_alarm=lambda: None)
+                def sleep(delay):
+                    self.assertTrue(indicator.working)
+                    self.timer.fire()
+                    self.assertEqual(self.pwr.value(), 1)
+                    waits.append(clock.now)
+                    clock.sleep_ms(delay)
+                    if clock.now >= 60100:
+                        raise KeyboardInterrupt
+                runtime_clock = types.SimpleNamespace(sleep_ms=sleep, ticks_ms=clock.ticks_ms,
+                                                      ticks_diff=clock.ticks_diff)
+                modules = {"board": types.SimpleNamespace(Board=lambda: board),
+                           "rtc": types.SimpleNamespace(PCF85063=lambda bus: rtc),
+                           "epaper": types.SimpleNamespace(Epaper=types.SimpleNamespace(for_board=lambda b:
+                               types.SimpleNamespace(display=lambda frame: displays.append(len(frame)))))}
+                with patch.dict(sys.modules, modules), patch.object(app, "ROOT", temporary), \
+                        patch.object(app, "time", runtime_clock), \
+                        patch.object(sign_log, "LOG", sign_log.Logger()), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    app.run(bytearray(192000), rtc_wake=True)
+                self.assertEqual(displays, [192000])  # Same content across the minute boundary.
+                self.assertGreaterEqual(max(reads), 60000)
+                self.assertGreater(len(waits), 600)
+                self.assertFalse(indicator.working)  # Ctrl-C stops the application.
+                indicator.set_working(True)
+
+    def test_usb_startup_wait_is_lit_and_ctrl_c_enters_stopped_charging_mode(self):
+        source = (Path(__file__).resolve().parents[1] / "firmware/main.py").read_text()
+        for interrupted in (False, True):
+            with self.subTest(interrupted=interrupted):
+                self.indicator.set_working(True)
+                calls = []
+                def sleep(delay):
+                    self.assertEqual(delay, 5000)
+                    self.assertTrue(self.indicator.working)
+                    for _ in range(10):
+                        self.timer.fire()
+                        self.assertEqual(self.pwr.value(), 1)
+                    if interrupted:
+                        raise KeyboardInterrupt
+                def run(*args, **kwargs):
+                    self.assertTrue(self.indicator.working)
+                    self.assertIs(kwargs["power_indicator"], self.indicator)
+                    calls.append(True)
+                def machine_pin(*args, **kwargs):
+                    return self.vbus
+                machine_pin.IN = 0
+                modules = {"framebuffer": types.SimpleNamespace(FRAME=None),
+                           "machine": types.SimpleNamespace(Pin=machine_pin),
+                           "time": types.SimpleNamespace(sleep_ms=sleep),
+                           "app": types.SimpleNamespace(run=run)}
+                with patch.dict(sys.modules, modules), \
+                        patch.object(PowerIndicator, "for_hardware", return_value=self.indicator), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    if interrupted:
+                        with self.assertRaises(KeyboardInterrupt):
+                            exec(compile(source, "firmware/main.py", "exec"), {})
+                    else:
+                        exec(compile(source, "firmware/main.py", "exec"), {})
+                self.assertEqual(calls, [] if interrupted else [True])
+                self.assertFalse(self.indicator.working)
+                self.timer.fire()
+                self.assertEqual(self.pwr.value(), 0)  # Charging resumes blinking after exit.
 
     def test_real_board_shares_startup_indicator_and_extinguishes_before_cutoff(self):
         pins = {}

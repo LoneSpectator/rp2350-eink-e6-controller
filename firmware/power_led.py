@@ -1,4 +1,7 @@
-"""PWR: working takes priority; idle charging blinks, otherwise off."""
+"""PWR stays on while firmware runs, including software-timed waits.
+
+After firmware stops, charging blinks; power-off extinguishes the LED.
+"""
 
 
 class PowerIndicator:
