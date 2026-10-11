@@ -4,8 +4,12 @@ import argparse
 import math
 from pathlib import Path
 import struct
+import sys
 
 from PIL import Image, ImageDraw, ImageFont
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "firmware"))
+from status_page import status_text
 
 
 def build_font(font_path, output, characters, cell=32, size=26, font_index=0):
@@ -46,6 +50,8 @@ def main():
     parser.add_argument("--font-index", type=int, default=0, help="TTC collection face index")
     args = parser.parse_args()
     chars = "".join(chr(n) for n in range(32, 127)) + args.chars
+    # A reduced font must also render the device's built-in NEXT status page.
+    chars += status_text((2026, 1, 1, 0, 0, 0), (2026, 1, 1, 0, 0, 0), 0, 3.2, 60)
     for path in args.text_files:
         chars += path.read_text(encoding="utf-8-sig")
     if args.cjk:

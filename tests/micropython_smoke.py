@@ -9,10 +9,12 @@ from calendar_time import from_minutes, to_minutes
 from content import BitmapFont, render_file
 from rtc import PCF85063
 from scheduler import Schedule
+import sign_log as log
 
 root = sys.argv[1]
 now = (2026, 10, 12, 10, 0, 0)
 config = read_config(root)
+log.configure(root, {"debug": True}, lambda: now)
 schedule = read_schedule(root, config)
 assert schedule.current(now)[1].path == "/text/open.txt"
 assert from_minutes(schedule.next_minute(now)) == (2026, 10, 12, 18, 0, 0)
@@ -39,9 +41,36 @@ assert Controller(root, config, display, FRAME).update(schedule, now)
 assert not Controller(root, config, display, FRAME).update(schedule, now)
 assert display.count == 1
 assert load_state(root)["path"] == "/text/open.txt"
+assert os.stat(root + "/text/open.txt.e6cache")[6] == 192076
+# Reboot-equivalent controllers alternate the user's two TXT paths. Returning
+# to either cached file must not open the font or call the text renderer.
+import text_cache
+loop = Schedule.parse("*/5 * * * * /text/open.txt\n2-59/5 * * * * /text/closed.txt")
+assert Controller(root, config, display, FRAME).update(loop, (2026, 10, 12, 10, 2, 0))
+render = text_cache.render_file
+def no_render(*args):
+    raise AssertionError("cached text was rendered again")
+text_cache.render_file = no_render
+assert Controller(root, config, display, FRAME).update(loop, (2026, 10, 12, 10, 5, 0))
+assert Controller(root, config, display, FRAME).update(loop, (2026, 10, 12, 10, 7, 0))
+text_cache.render_file = render
+assert display.count == 4
 for path in ("/text/default.txt", "/text/closed.txt", "/pic/weekend.e6"):
     frame = render_file(root + path, root + "/fonts/sign.e6f", config["text"], 180, FRAME)
     assert len(frame) == 192000
     assert frame is FRAME
     del frame
-print("MicroPython smoke passed: cron, leap/year boundary, Chinese/English, E6, display cache")
+markdown = Schedule.parse("* * * * * /text/notice.md")
+assert Controller(root, config, display, FRAME).update(markdown, now)
+text_cache.render_file = no_render
+assert not Controller(root, config, display, FRAME).update(markdown, now)
+text_cache.render_file = render
+from status_page import render_status
+assert render_status(now, now, 600, 3.75, 60, root + "/fonts/sign.e6f", 180, FRAME) is FRAME
+try:
+    raise ValueError("smoke warning traceback")
+except ValueError as exc:
+    log.exception("Smoke exception", exc)
+assert os.stat(root + "/logs/debug.log")[6] > 0
+assert os.stat(root + "/logs/warnings.log")[6] > 0
+print("MicroPython smoke passed: cron, TXT/Markdown pixel cache, six-color text, status page, logs")

@@ -205,6 +205,10 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Generated on-device TXT pixel caches (keep source TXT/font files).
+*.e6cache
+*.e6cache.tmp
+
 # Ruff stuff:
 .ruff_cache/
 

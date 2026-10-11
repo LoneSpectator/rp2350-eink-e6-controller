@@ -127,15 +127,22 @@ class BitmapFont:
             self.record_size = 5 + self.size
             if os.stat(path)[6] != 16 + self.count * self.record_size:
                 raise ValueError("truncated E6F1 font")
+            # At most 8 KiB of bitmap payload, plus bounded dictionary overhead.
+            self.cache_limit = min(64, 8192 // self.size)
+            self.cache = {}
         except Exception:
             self.stream.close()
             raise
 
     def close(self):
         self.stream.close()
+        self.cache.clear()
 
     def glyph(self, character):
         target = ord(character)
+        cached = self.cache.get(target)
+        if cached is not None:
+            return cached
         low, high = 0, self.count - 1
         while low <= high:
             mid = (low + high) // 2
@@ -144,7 +151,11 @@ class BitmapFont:
             if value == target:
                 if not 1 <= advance <= self.width:
                     raise ValueError("invalid font advance")
-                return advance, exact_read(self.stream, self.size)
+                result = advance, exact_read(self.stream, self.size)
+                if len(self.cache) >= self.cache_limit:
+                    self.cache.clear()
+                self.cache[target] = result
+                return result
             if value < target:
                 low = mid + 1
             else:
@@ -152,7 +163,20 @@ class BitmapFont:
         raise ValueError("font missing character U+%04X; regenerate font" % target)
 
 
-def draw_text(text, font, canvas, settings):
+def read_text(path):
+    with open(path, "rb") as stream:
+        data = stream.read(8193)
+    if len(data) > 8192:
+        raise ValueError("TXT exceeds 8192 bytes")
+    text = data.decode("utf-8")
+    return text[1:] if text.startswith("\ufeff") else text
+
+
+def normalize_text(text):
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ")
+
+
+def text_layout(font, canvas, settings):
     margin = settings.get("margin", 24)
     scale = settings.get("scale", 2)
     spacing = settings.get("line_spacing", 8)
@@ -166,11 +190,25 @@ def draw_text(text, font, canvas, settings):
     if 2 * margin + font.width * scale > canvas.width or (
             2 * margin + font.height * scale > canvas.height):
         raise ValueError("text layout has no room for a glyph")
+    return margin, scale, spacing, foreground, background
+
+
+def paint_glyph(font, bitmap, canvas, x, y, scale, color, bold=False):
+    row_bytes = (font.width + 7) // 8
+    for gy in range(font.height):
+        for gx in range(font.width):
+            if bitmap[gy * row_bytes + gx // 8] & (0x80 >> (gx % 8)):
+                for sy in range(scale):
+                    for sx in range(scale + int(bold)):
+                        canvas.pixel(x + gx * scale + sx, y + gy * scale + sy, color)
+
+
+def draw_text(text, font, canvas, settings):
+    margin, scale, spacing, foreground, background = text_layout(font, canvas, settings)
     canvas.fill(background)
     x, y = margin, margin
     right, bottom = canvas.width - margin, canvas.height - margin
-    row_bytes = (font.width + 7) // 8
-    for character in text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    "):
+    for character in normalize_text(text):
         if character == "\n":
             x, y = margin, y + font.height * scale + spacing
             continue
@@ -181,12 +219,7 @@ def draw_text(text, font, canvas, settings):
             x, y = margin, y + font.height * scale + spacing
         if y + font.height * scale > bottom:
             raise ValueError("TXT exceeds one screen; shorten it or reduce text scale")
-        for gy in range(font.height):
-            for gx in range(font.width):
-                if bitmap[gy * row_bytes + gx // 8] & (0x80 >> (gx % 8)):
-                    for sy in range(scale):
-                        for sx in range(scale):
-                            canvas.pixel(x + gx * scale + sx, y + gy * scale + sy, foreground)
+        paint_glyph(font, bitmap, canvas, x, y, scale, foreground)
         x += advance * scale
 
 
@@ -199,17 +232,15 @@ def render_file(path, font_path, settings=None, rotation=180, buffer=None):
         read_bmp(path, canvas)
     elif suffix == "e6":
         read_e6(path, canvas)
-    elif suffix == "txt":
-        with open(path, "rb") as stream:
-            data = stream.read(8193)
-        if len(data) > 8192:
-            raise ValueError("TXT exceeds 8192 bytes")
-        text = data.decode("utf-8")
-        if text.startswith("\ufeff"):
-            text = text[1:]
+    elif suffix in ("txt", "md"):
+        text = read_text(path)
         font = BitmapFont(font_path)
         try:
-            draw_text(text, font, canvas, settings or {})
+            if suffix == "md":
+                from markdown_content import draw_markdown
+                draw_markdown(text, font, canvas, settings or {})
+            else:
+                draw_text(text, font, canvas, settings or {})
         finally:
             font.close()
     else:

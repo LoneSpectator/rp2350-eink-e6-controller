@@ -1,4 +1,6 @@
 from pathlib import Path
+import contextlib
+import io
 import sys
 import unittest
 
@@ -115,7 +117,10 @@ class EpaperTests(unittest.TestCase):
 
     def test_frame_transfer_refresh_and_sleep(self):
         frame = bytes((0x01,)) * FRAME_BYTES
-        self.screen.display(frame)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.screen.display(frame)
+        self.assertIn("[timing] panel_refresh: 300 ms", output.getvalue())
         index = self.spi.writes.index((0, b"\x10"))
         packets = []
         for kind, value in self.spi.writes[index + 1:]:
@@ -152,6 +157,20 @@ class EpaperTests(unittest.TestCase):
 
 
 class ShutdownTests(unittest.TestCase):
+    def test_next_press_before_cutoff_keeps_power_for_status(self):
+        class Board:
+            rtc_int = Pin(1)
+            class next_button:
+                @staticmethod
+                def pressed(): return True
+            def usb(self): return False
+            def sync(self): pass
+            def power_off(self): raise AssertionError("NEXT press lost at power-off")
+        rtc = PCF85063(I2C())
+        rtc.set_time((2026, 10, 11, 9, 0, 0))
+        self.assertFalse(shut_down(Board(), rtc, (2026, 10, 11, 10, 0, 0)))
+        self.assertFalse(rtc.i2c.registers[1] & 0x80)
+
     def test_never_power_off_on_past_alarm_or_low_int(self):
         class Board:
             rtc_int = Pin(0)

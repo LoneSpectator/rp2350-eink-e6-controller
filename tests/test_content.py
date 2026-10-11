@@ -1,14 +1,17 @@
 import json
+import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "firmware"))
 from app import Controller, DEFAULTS, load_state, read_config
 from content import BitmapFont, Canvas, draw_text, nearest_color, read_bmp, read_e6, render_file
 from scheduler import Schedule
+from text_cache import HEADER_BYTES
 
 
 def tiny_font(path):
@@ -112,6 +115,25 @@ class ContentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             BitmapFont(str(path))
 
+    def test_glyph_cache_avoids_card_reads_and_bounds_memory(self):
+        path = self.root / "font.e6f"
+        tiny_font(path)
+        font = BitmapFont(str(path))
+        font.cache_limit = 2
+        try:
+            with patch.object(font, "stream", wraps=font.stream) as stream:
+                expected = font.glyph("A")
+                reads = stream.read.call_count
+                self.assertEqual(font.glyph("A"), expected)
+                self.assertEqual(stream.read.call_count, reads)
+                font.glyph("B")
+                font.glyph("中")
+                self.assertLessEqual(len(font.cache), 2)
+                self.assertEqual(font.glyph("A"), expected)
+                self.assertGreater(stream.read.call_count, reads)
+        finally:
+            font.close()
+
 
 class Display:
     def __init__(self, fail=False):
@@ -179,3 +201,118 @@ class ControllerTests(unittest.TestCase):
         self.config["default"] = None
         self.assertFalse(Controller(str(self.root), self.config, Display()).update(
             Schedule.parse(""), self.now))
+
+    def text_fixture(self):
+        font = self.root / "font.e6f"
+        tiny_font(font)
+        (self.root / "a.txt").write_text("\ufeffA\t中\r\n", encoding="utf-8")
+        self.config["font"] = "/font.e6f"
+        self.config["rotation"] = 0
+        self.config["text"] = {"margin": 0, "scale": 1}
+        return font, Schedule.parse("0 9 * * * /a.txt")
+
+    def change_font_byte(self, path, offset, value):
+        before = path.stat()
+        with path.open("r+b") as stream:
+            stream.seek(offset)
+            stream.write(value)
+        # Font changes use size/mtime. Advance by FAT's two-second granularity.
+        os.utime(path, (before.st_atime, before.st_mtime + 2))
+        self.assertEqual(path.stat().st_size, before.st_size)
+
+    def test_font_changes_rebuild_cache_only_changed_pixels_refresh(self):
+        font, schedule = self.text_fixture()
+        display = Display()
+        controller = Controller(str(self.root), self.config, display)
+        self.assertTrue(controller.update(schedule, self.now))
+        # Records are space, A, B, Chinese, each seven bytes. B is unused.
+        self.change_font_byte(font, 16 + 2 * 7 + 5, b"\x40")
+        self.assertFalse(controller.update(schedule, self.now))
+        self.change_font_byte(font, 16 + 7 + 5, b"\x40")
+        self.assertTrue(controller.update(schedule, self.now))
+        self.assertEqual(display.count, 2)
+
+    def test_font_advance_changes_invalidate_pixel_cache(self):
+        font, schedule = self.text_fixture()
+        display = Display()
+        controller = Controller(str(self.root), self.config, display)
+        controller.update(schedule, self.now)
+        self.change_font_byte(font, 16 + 7 + 4, b"\x01")
+        self.assertTrue(controller.update(schedule, self.now))
+        self.assertEqual(display.count, 2)
+
+    def test_controller_closes_font_on_skip_render_error_and_display_error(self):
+        _, schedule = self.text_fixture()
+        opened = []
+        def track_font(path):
+            font = BitmapFont(path)
+            opened.append(font)
+            return font
+        with patch("content.BitmapFont", side_effect=track_font):
+            controller = Controller(str(self.root), self.config, Display())
+            controller.update(schedule, self.now)
+            self.assertFalse(controller.update(schedule, self.now))
+            self.config["text"] = {"scale": 0}
+            with self.assertRaises(ValueError):
+                controller.update(schedule, self.now)
+            self.config["text"] = {"margin": 1, "scale": 1}
+            with self.assertRaises(OSError):
+                Controller(str(self.root), self.config, Display(fail=True)).update(schedule, self.now)
+        self.assertEqual(len(opened), 3)
+        self.assertTrue(all(font.stream.closed for font in opened))
+
+    def test_rebooted_txt_rotation_reads_pixels_without_font_or_layout(self):
+        self.text_fixture()
+        (self.root / "b.txt").write_text("中A", encoding="utf-8")
+        schedule = Schedule.parse("*/5 * * * * /a.txt\n2-59/5 * * * * /b.txt")
+        display = Display()
+        frame = bytearray(192000)
+        with patch("text_cache.render_file", wraps=render_file) as render:
+            for minute in (0, 2):
+                Controller(str(self.root), self.config, display, frame).update(
+                    schedule, (2026, 10, 11, 10, minute, 0))
+            self.assertEqual(render.call_count, 2)
+            with patch("content.BitmapFont", side_effect=AssertionError("font opened on cache hit")):
+                for minute in (5, 7):
+                    Controller(str(self.root), self.config, display, frame).update(
+                        schedule, (2026, 10, 11, 10, minute, 0))
+            self.assertEqual(render.call_count, 2)
+        self.assertEqual(display.count, 4)
+        for name in ("a.txt", "b.txt"):
+            self.assertEqual((self.root / (name + ".e6cache")).stat().st_size,
+                             HEADER_BYTES + len(frame))
+
+    def test_txt_same_size_mtime_edit_config_and_corruption_rebuild(self):
+        _, schedule = self.text_fixture()
+        text = self.root / "a.txt"
+        display = Display()
+        controller = Controller(str(self.root), self.config, display)
+        with patch("text_cache.render_file", wraps=render_file) as render:
+            controller.update(schedule, self.now)
+            before = text.stat()
+            text.write_bytes(text.read_bytes().replace(b"A", b"B"))
+            os.utime(text, ns=(before.st_atime_ns, before.st_mtime_ns))
+            controller.update(schedule, self.now)
+            self.assertEqual(render.call_count, 2)
+            self.config["rotation"] = 180
+            controller.update(schedule, self.now)
+            self.config["text"] = {"scale": 2}
+            controller.update(schedule, self.now)
+            cache = self.root / "a.txt.e6cache"
+            with cache.open("r+b") as stream:
+                stream.seek(HEADER_BYTES)
+                value = stream.read(1)[0]
+                stream.seek(HEADER_BYTES)
+                stream.write(bytes((value ^ 1,)))
+            # Bad pixels are regenerated even when the retained screen is current.
+            self.assertFalse(controller.update(schedule, self.now))
+            self.assertEqual(render.call_count, 5)
+
+    def test_cache_write_failure_does_not_block_display(self):
+        _, schedule = self.text_fixture()
+        display = Display()
+        with patch("text_cache.save_cache", side_effect=OSError("card full")):
+            self.assertTrue(Controller(str(self.root), self.config, display).update(schedule, self.now))
+        self.assertEqual(display.count, 1)
+        self.assertEqual(load_state(str(self.root))["path"], "/a.txt")
+        self.assertFalse((self.root / "a.txt.e6cache").exists())

@@ -5,9 +5,11 @@ import hashlib
 import json
 import os
 import time
+import sign_log as log
 
 from calendar_time import from_seconds, to_seconds
 from scheduler import Schedule, card_path
+from timing import report, ticks_ms
 
 ROOT = "/sd"
 DEFAULTS = {
@@ -15,8 +17,10 @@ DEFAULTS = {
     "default": "/text/default.txt", "rotation": 180,
     "battery_sleep": True, "wake_checkpoint_minutes": 360,
     "retry_minutes": 5, "low_battery_voltage": 3.1,
+    "status_seconds": 60,
     "text": {"scale": 2, "margin": 24, "line_spacing": 8,
              "foreground": 0, "background": 1},
+    "logging": log.DEFAULTS,
 }
 
 
@@ -54,7 +58,8 @@ def read_config(root):
         card_path(config["default"])
     if config["rotation"] not in (0, 180) or not isinstance(config["battery_sleep"], bool):
         raise ValueError("invalid rotation or battery_sleep")
-    for key, upper in (("wake_checkpoint_minutes", 360), ("retry_minutes", 60)):
+    for key, upper in (("wake_checkpoint_minutes", 360), ("retry_minutes", 60),
+                       ("status_seconds", 600)):
         if not isinstance(config[key], int) or not 1 <= config[key] <= upper:
             raise ValueError(key + " out of range")
     if not isinstance(config["low_battery_voltage"], (int, float)) or not (
@@ -62,6 +67,7 @@ def read_config(root):
         raise ValueError("invalid low_battery_voltage")
     if not isinstance(config["text"], dict):
         raise ValueError("text settings must be an object")
+    config["logging"] = log.validate_settings(config["logging"])
     return config
 
 
@@ -85,16 +91,24 @@ def file_digest(path):
 
 
 def content_digest(root, path, config):
-    limit = 8192 if path.lower().endswith(".txt") else 2000000
+    is_text = path.lower().rsplit(".", 1)[-1] in ("txt", "md")
+    limit = 8192 if is_text else 2000000
     if os.stat(root + path)[6] > limit:
         raise ValueError("content file exceeds supported size")
     digest = hashlib.sha256()
     digest.update(file_digest(root + path).encode())
     digest.update(str(config["rotation"]).encode())
-    if path.lower().endswith(".txt"):
+    if is_text:
+        # Version this key whenever TXT rasterization/cache semantics change.
+        digest.update(b"E6C1-renderer-2")
+        digest.update(path.lower().rsplit(".", 1)[-1].encode())
         digest.update(json.dumps(config["text"]).encode())
-        # Include font bytes, so editing the font also invalidates the display cache.
-        digest.update(file_digest(root + relative_file(config["font"])).encode())
+        font_path = relative_file(config["font"])
+        metadata = os.stat(root + font_path)
+        digest.update(font_path.encode("utf-8"))
+        # TF-card font updates normally change size or FAT modification time.
+        # If both are deliberately preserved, delete the sidecar to rebuild.
+        digest.update(str((metadata[6], metadata[8])).encode())
     return binascii.hexlify(digest.digest()).decode()
 
 
@@ -110,13 +124,19 @@ def load_state(root):
         return {}
 
 
-def save_state(root, path, digest):
+def save_state(root, path, digest, previous_path=None):
     # FAT rename-overwrite is not portable. The old screen remains correct if an
     # interrupted write loses this cache; boot then performs one redundant refresh.
     temporary = root + "/.display-state.tmp"
     destination = root + "/.display-state.json"
     with open(temporary, "w") as stream:
-        json.dump({"version": 1, "path": path, "digest": digest}, stream)
+        state = {"version": 1, "path": path, "digest": digest}
+        if previous_path is not None:
+            state["previous_path"] = previous_path
+        # MicroPython json.dump has no indent argument. Keep generated JSON
+        # four-space indented as well as the TF-card configuration.
+        stream.write("{\n" + ",\n".join("    " + json.dumps(key) + ": " + json.dumps(state[key])
+                                    for key in state) + "\n}\n")
     if hasattr(os, "sync"):
         os.sync()
     try:
@@ -146,72 +166,155 @@ class Controller:
         self.root, self.config, self.display = root, config, display
         self.buffer = buffer
 
-    def update(self, schedule, now):
+    def update(self, schedule, now, fallback_path=None):
+        started = ticks_ms()
         active = schedule.current(now)
+        stage = report("select", started)
         path = active[1].path if active else self.config["default"]
         if path is None:
-            print("No prior cron event; retain screen")
+            path = fallback_path
+        if path is None:
+            log.info("No prior cron event; retain screen")
             return False
         path = card_path(path)
-        digest = content_digest(self.root, path, self.config)
-        state = load_state(self.root)
-        if state.get("path") == path and state.get("digest") == digest:
-            print("Content unchanged:", path)
-            return False
         from content import render_file
-        gc.collect()
-        frame = render_file(self.root + path, self.root + relative_file(self.config["font"]),
-                            self.config["text"], self.config["rotation"], self.buffer)
+        frame = None
         try:
+            digest = content_digest(self.root, path, self.config)
+            state = load_state(self.root)
+            stage = report("fingerprint", stage)
+            is_text = path.lower().rsplit(".", 1)[-1] in ("txt", "md")
+            if is_text:
+                from text_cache import text_frame
+                frame, digest = text_frame(
+                    self.root + path, self.root + relative_file(self.config["font"]),
+                    self.config["text"], self.config["rotation"], digest, self.buffer)
+                stage = report("text_cache", stage)
+            if state.get("path") == path and state.get("digest") == digest:
+                log.info("Content unchanged:", path)
+                return False
+            gc.collect()
+            if not is_text:
+                frame = render_file(self.root + path, self.root + relative_file(self.config["font"]),
+                                    self.config["text"], self.config["rotation"], self.buffer)
+                stage = report("render", stage)
+            gc.collect()
             self.display.display(frame)
+            stage = report("display", stage)
             save_state(self.root, path, digest)
+            report("state", stage)
         finally:
             del frame
             gc.collect()
-        print("Displayed:", path)
+            report("update_total", started)
+        log.info("Displayed:", path)
         return True
 
 
 def shut_down(board, rtc, target):
     rtc.set_alarm(target)
     board.sync()
-    print("RTC wake:", target)
+    log.info("RTC wake:", target)
     if board.usb():
         return
     # Long font/image processing may cross the target. Do not power off with
     # an already-latched alarm or a time that has already passed.
     if to_seconds(rtc.read_time()) >= to_seconds(target) or not board.rtc_int.value():
         raise OSError("wake time passed or RTC INT still low; leave MCU running")
+    button = getattr(board, "next_button", None)
+    if button is not None and button.pressed():
+        rtc.disable_alarm()
+        log.info("NEXT before power-off; keep MCU on for status page")
+        return False
     board.power_off()
 
 
-def run(buffer):
+def show_status(board, rtc, display, buffer, root, config, session):
+    from status_page import render_status
+    rtc.disable_alarm()
+    now = rtc.read_time()
+    started, elapsed = session.sample(now)
+    voltage = sum(board.battery_voltage() for _ in range(16)) / 16
+    previous = load_state(root)
+    previous_path = previous.get("previous_path") if previous.get("path") == "@status" else previous.get("path")
+    if previous_path is None and config["default"] is None and read_schedule(root, config).current(now) is None:
+        log.warning("No normal content is available to restore; retain existing screen")
+        return False
+    frame = render_status(now, started, elapsed, voltage, config["status_seconds"],
+                          root + relative_file(config["font"]), config["rotation"], buffer)
+    # Mark the transient screen before refresh, so power loss mid-refresh cannot
+    # leave a cache claiming that the normal content is still on the panel.
+    save_state(root, "@status", "temporary", previous_path)
+    display.display(frame)
+    session.shown(config["status_seconds"])
+    log.info("Status page; restore in", config["status_seconds"], "seconds; battery V:", voltage)
+    return True
+
+
+def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None):
     from board import Board
     from epaper import Epaper
     from rtc import PCF85063
+    from status_page import StatusSession
     board = Board()
     rtc = PCF85063(board.i2c)
     display = Epaper.for_board(board)
+    if rtc_wake is None:
+        rtc_wake = not board.rtc_int.value()
+    session = StatusSession(clock=time, boot_ms=boot_ms,
+                            pending=key_at_boot or (not board.usb() and not rtc_wake))
     config = dict(DEFAULTS)
     mounted = False
     last_minute = None
     while True:
         try:
             if not board.usb() and board.battery_voltage() < config["low_battery_voltage"]:
-                print("Battery low; charge over USB")
+                log.warning("Battery low; charge over USB")
                 rtc.disable_alarm()
                 board.power_off()
             if not mounted:
+                started = ticks_ms()
                 board.mount_sd()
+                report("mount_sd", started)
                 mounted = True
+                log.configure(ROOT, DEFAULTS["logging"], rtc.read_time)
+                config = read_config(ROOT)
+                log.configure(ROOT, config["logging"], rtc.read_time)
+                log.info("Started; USB:", board.usb(), "battery V:", board.battery_voltage())
             now = rtc.read_time()
+            session.sample(now)
+            if board.next_button.pressed() or session.pending:
+                session.pending = False
+                config = read_config(ROOT)
+                log.configure(ROOT, config["logging"], rtc.read_time)
+                board.activity.value(1)
+                show_status(board, rtc, display, buffer, ROOT, config, session)
+                board.activity.value(0)
+                continue
+            if session.active():
+                if not session.expired():
+                    time.sleep_ms(100)
+                    continue
+                session.finish()
+                last_minute = None
+                log.info("Status timeout; restore latest schedule")
             minute = to_seconds(now) // 60
             if last_minute != minute:
+                started = ticks_ms()
                 config = read_config(ROOT)
+                log.configure(ROOT, config["logging"], rtc.read_time)
                 schedule = read_schedule(ROOT, config)
+                report("load_schedule", started)
                 board.activity.value(1)
                 controller = Controller(ROOT, config, display, buffer)
-                controller.update(schedule, now)
+                state = load_state(ROOT)
+                fallback = state.get("previous_path") if state.get("path") == "@status" else None
+                controller.update(schedule, now, fallback)
+                # A NEXT press during rendering is latched by its GPIO IRQ.
+                if board.next_button.pressed():
+                    session.pending = True
+                    board.activity.value(0)
+                    continue
                 board.activity.value(0)
                 # Use time *after* rendering. Reconcile if refresh crossed an event.
                 after = rtc.read_time()
@@ -221,33 +324,36 @@ def run(buffer):
                 next_minute = schedule.next_minute(after)
                 if config["battery_sleep"] and not board.usb():
                     target = wake_target(after, next_minute, config["wake_checkpoint_minutes"])
-                    shut_down(board, rtc, target)
+                    if shut_down(board, rtc, target) is False:
+                        session.pending = True
+                        continue
                 else:
                     rtc.disable_alarm()
                 last_minute = minute
-            time.sleep_ms(1000)
+            time.sleep_ms(100)
         except KeyboardInterrupt:
             board.screen_power.value(0)
             board.activity.value(0)
-            print("Stopped; USB REPL available")
+            log.info("Stopped; USB REPL available")
             return
         except Exception as exc:
             board.screen_power.value(0)
             board.activity.value(0)
-            print("Sign error:", exc)
+            log.exception("Sign error", exc)
             # Retain the existing image and retry via RTC when battery-powered.
-            if not board.usb() and config["battery_sleep"]:
+            if not session.active() and not board.usb() and config["battery_sleep"]:
                 try:
                     now = rtc.read_time()
                     target = wake_target(now, None, retry_minutes=config["retry_minutes"])
-                    shut_down(board, rtc, target)
+                    if shut_down(board, rtc, target) is False:
+                        session.pending = True
                 except Exception as alarm_error:
-                    print("Cannot safely arm wake:", alarm_error)
+                    log.exception("Cannot safely arm wake", alarm_error)
                     # Invalid RTC must be set over USB. Avoid silently draining battery.
                     try:
                         rtc.disable_alarm()
                         board.power_off()
                     except Exception as power_error:
-                        print("Power-off failed:", power_error)
+                        log.exception("Power-off failed", power_error)
             last_minute = None
             time.sleep_ms(1000)

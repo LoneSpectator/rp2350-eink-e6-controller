@@ -12,8 +12,8 @@ def card_path(path):
     parts = path.lstrip("/").split("/")
     if any(part in ("", ".", "..") for part in parts):
         raise ValueError("TF paths cannot contain empty, . or .. components")
-    if not any(path.lower().endswith(suffix) for suffix in (".bmp", ".e6", ".txt")):
-        raise ValueError("supported files: .bmp, .e6, .txt")
+    if not any(path.lower().endswith(suffix) for suffix in (".bmp", ".e6", ".txt", ".md")):
+        raise ValueError("supported files: .bmp, .e6, .txt, .md")
     return "/" + "/".join(parts)
 
 

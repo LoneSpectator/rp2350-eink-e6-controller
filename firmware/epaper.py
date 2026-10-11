@@ -4,6 +4,7 @@ Adapted from Waveshare team, MIT notice in ../licenses/waveshare-MIT.txt.
 Source commit: fc2b261e985934bf67d99aa26358e463deb0aa65.
 """
 import time
+from timing import report, ticks_ms
 
 WIDTH, HEIGHT = 800, 480
 FRAME_BYTES = WIDTH * HEIGHT // 2
@@ -78,18 +79,24 @@ class Epaper:
     def display(self, frame):
         if len(frame) != FRAME_BYTES:
             raise ValueError("EPD frame must be exactly 192000 bytes")
+        stage = ticks_ms(self.clock)
         self.initialize()
+        stage = report("panel_init", stage, self.clock)
         self.command(0x10)
         view = memoryview(frame)
         for offset in range(0, len(view), 4096):
             self._write(view[offset:offset + 4096], 1)
+        stage = report("frame_upload", stage, self.clock)
         self.command(0x04)
         self.wait_idle()
         self.command(0x06, b"\x6f\x1f\x17\x49")
+        stage = report("panel_power_on", stage, self.clock)
         self.command(0x12, b"\x00")
         self.wait_idle(require_busy=True)
+        stage = report("panel_refresh", stage, self.clock)
         self.command(0x02, b"\x00")
         self.wait_idle()
         self.command(0x07, b"\xa5")
         self.clock.sleep_ms(10)
         self.power.value(0)
+        report("panel_sleep", stage, self.clock)

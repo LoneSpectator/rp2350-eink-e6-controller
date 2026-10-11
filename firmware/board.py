@@ -10,6 +10,8 @@ class Board:
         self.screen_power = Pin(16, Pin.OUT, value=0)
         self.vbus = Pin(24, Pin.IN)
         self.key = Pin(19, Pin.IN, Pin.PULL_UP)
+        from status_page import NextButton
+        self.next_button = NextButton(self.key, Pin.IRQ_FALLING)
         self.rtc_int = Pin(6, Pin.IN, Pin.PULL_UP)
         self.charging = Pin(17, Pin.IN, Pin.PULL_UP)
         self.activity = Pin(25, Pin.OUT, value=0)
