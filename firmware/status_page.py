@@ -88,11 +88,10 @@ def status_text(now, started, elapsed, voltage, seconds):
     minutes, seconds_elapsed = divmod(remainder, 60)
     percent = estimate_charge(voltage)
     color = "red" if percent <= 20 else "black"
-    return ('# 设备状态\n'
-            '当前：%s\n启动：%s\n运行：%dd %02d:%02d:%02d\n'
-            '电池：%.2f V\n<span style="color: %s">估算电量：约 %d%%</span>\n'
-            '%d秒后恢复排程') % (date_text(now), date_text(started), days, hours,
-                                 minutes, seconds_elapsed, voltage, color, percent, seconds)
+    return ('## 设备状态\n当前：%s\n启动：%s\n运行：%dd %02d:%02d:%02d\n'
+            '电池：%.2f V\n<span style="color: %s">电量：%d%%</span>') % (
+                date_text(now), date_text(started), days, hours,
+                minutes, seconds_elapsed, voltage, color, percent)
 
 
 def render_status(now, started, elapsed, voltage, seconds, font_path, rotation, buffer):
@@ -101,7 +100,7 @@ def render_status(now, started, elapsed, voltage, seconds, font_path, rotation, 
     font = BitmapFont(font_path)
     try:
         draw_markdown(status_text(now, started, elapsed, voltage, seconds), font, canvas,
-                      {"margin": 24, "scale": 1, "line_spacing": 8})
+                      {"margin": 24, "scale": 2, "line_spacing": 8})
     finally:
         font.close()
     if rotation == 180:

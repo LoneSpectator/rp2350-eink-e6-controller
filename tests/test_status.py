@@ -89,8 +89,9 @@ class StatusTests(unittest.TestCase):
         text = status_text((2026, 10, 11, 21, 30, 0), (2026, 10, 10, 20, 0, 0),
                            91800, 3.75, 60)
         for value in ("2026-10-11 21:30:00", "2026-10-10 20:00:00", "1d 01:30:00",
-                      "3.75 V", "50%", "60秒"):
+                      "3.75 V", "50%"):
             self.assertIn(value, text)
+        self.assertEqual(len(text.splitlines()[1:]), 5)
 
     def test_usb_and_battery_status_restore_latest_schedule_after_sixty_seconds(self):
         for usb in (True, False):
