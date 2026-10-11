@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, "firmware")
 from framebuffer import FRAME
-from app import Controller, load_state, read_config, read_schedule, wake_target
+from app import Controller, empty_battery_shutdown, load_state, read_config, read_schedule, wake_target
 from calendar_time import from_minutes, to_minutes
 from content import BitmapFont, render_file
 from rtc import PCF85063
@@ -24,8 +24,9 @@ assert wake_target((2026, 12, 31, 23, 59, 30),
                    to_minutes((2027, 1, 1, 0, 0, 0))) == (2027, 1, 1, 0, 0, 0)
 
 font = BitmapFont(root + "/fonts/sign.e6f")
-assert len(font.glyph("中")[1]) == 128
-assert len(font.glyph("A")[1]) == 128
+assert (font.width, font.height) == (64, 64)
+assert len(font.glyph("中")[1]) == 512
+assert len(font.glyph("A")[1]) == 512
 font.close()
 
 
@@ -67,10 +68,45 @@ assert not Controller(root, config, display, FRAME).update(markdown, now)
 text_cache.render_file = render
 from status_page import render_status
 assert render_status(now, now, 600, 3.75, 60, root + "/fonts/sign.e6f", 180, FRAME) is FRAME
+from battery_warning import empty_battery_frame, overlay_low_battery
+# Battery overlays are applied after cache loading, and removed on recovery.
+text_cache.render_file = no_render
+controller = Controller(root, config, display, FRAME)
+assert controller.update(markdown, now, voltage=3.4)
+assert not controller.update(markdown, now, voltage=3.4)
+assert controller.update(markdown, now, voltage=3.75)
+text_cache.render_file = render
+assert overlay_low_battery(FRAME, 180) is FRAME
+assert empty_battery_frame(FRAME, 180) is FRAME
+class Indicator:
+    def value(self, level):
+        self.level = level
+
+class EmptyBoard:
+    activity, screen_power = Indicator(), Indicator()
+    offs = 0
+    def usb(self): return False
+    def power_off(self):
+        assert self.screen_power.level == self.activity.level == 0
+        assert load_state(root)["digest"] == "shown-180"
+        self.offs += 1
+
+class Alarm:
+    def disable_alarm(self): pass
+
+board = EmptyBoard()
+count = display.count
+assert empty_battery_shutdown(board, Alarm(), display, FRAME, config, 3.0, root)
+assert display.count == count + 1 and board.offs == 1
+assert empty_battery_shutdown(board, Alarm(), display, FRAME, config, 3.0, root)
+assert display.count == count + 1 and board.offs == 2
+text_cache.render_file = no_render
+assert controller.update(markdown, now, voltage=3.75)
+text_cache.render_file = render
 try:
     raise ValueError("smoke warning traceback")
 except ValueError as exc:
     log.exception("Smoke exception", exc)
 assert os.stat(root + "/logs/debug.log")[6] > 0
 assert os.stat(root + "/logs/warnings.log")[6] > 0
-print("MicroPython smoke passed: cron, TXT/Markdown pixel cache, six-color text, status page, logs")
+print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, logs")

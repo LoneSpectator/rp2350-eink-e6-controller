@@ -164,10 +164,15 @@ class BitmapFont:
 
 
 def read_text(path):
-    with open(path, "rb") as stream:
-        data = stream.read(8193)
-    if len(data) > 8192:
+    length = os.stat(path)[6]
+    if length > 8192:
         raise ValueError("TXT exceeds 8192 bytes")
+    with open(path, "rb") as stream:
+        # MicroPython allocates the requested read size before shrinking it.
+        # Short signs need only their actual length, rather than an 8 KiB block.
+        data = stream.read(length + 1)
+    if len(data) != length:
+        raise ValueError("TXT changed while reading")
     text = data.decode("utf-8")
     return text[1:] if text.startswith("\ufeff") else text
 
@@ -178,7 +183,7 @@ def normalize_text(text):
 
 def text_layout(font, canvas, settings):
     margin = settings.get("margin", 24)
-    scale = settings.get("scale", 2)
+    scale = settings.get("scale", 1)
     spacing = settings.get("line_spacing", 8)
     foreground = settings.get("foreground", 0)
     background = settings.get("background", 1)

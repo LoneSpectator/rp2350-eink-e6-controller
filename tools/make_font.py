@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "firmware"))
 from status_page import status_text
 
 
-def build_font(font_path, output, characters, cell=32, size=26, font_index=0):
+def build_font(font_path, output, characters, cell=64, size=52, font_index=0):
     if not 8 <= cell <= 64 or not 1 <= size <= cell:
         raise ValueError("cell must be 8..64; font size must fit the cell")
     font = ImageFont.truetype(str(font_path), size, index=font_index)
@@ -45,8 +45,8 @@ def main():
     parser.add_argument("text_files", nargs="*", type=Path)
     parser.add_argument("--chars", default="")
     parser.add_argument("--cjk", action="store_true", help="include basic CJK, punctuation, ASCII")
-    parser.add_argument("--cell", type=int, default=32)
-    parser.add_argument("--size", type=int, default=26)
+    parser.add_argument("--cell", type=int, default=64)
+    parser.add_argument("--size", type=int, default=52)
     parser.add_argument("--font-index", type=int, default=0, help="TTC collection face index")
     args = parser.parse_args()
     chars = "".join(chr(n) for n in range(32, 127)) + args.chars

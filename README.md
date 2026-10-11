@@ -2,7 +2,7 @@
 
 在 Waveshare **PhotoPainter (B)** 的 Pico 2 主控上运行 **MicroPython**。从 TF 卡读取类似 cron 的排程，用图片或 UTF-8 TXT 替代 cron 命令。使用产品已有电池和 PCF85063 RTC 定时唤醒；完成更新后关闭主控，墨水屏保持画面。
 
-用户已在实机确认基本显示、RTC 校时和电池定时循环刷新，USB 日志确认了文本缓存命中、NEXT 状态页及 60 秒恢复流程。程序通过云端单元测试及 MicroPython v1.26.0 Unix 验证，新五行大字布局、Markdown 色彩和 NEXT 电池唤醒继续实测。从[部署与实机验证](docs/deployment.md)开始，硬件来源见[产品分析](docs/product-analysis.md)。
+用户已在实机确认基本显示、RTC 校时和电池定时循环刷新，USB 日志确认了文本缓存命中、NEXT 状态页及 60 秒恢复流程。程序通过云端单元测试及 MicroPython v1.26.0 Unix 验证，思源黑体、低电量画面和 NEXT 电池唤醒继续实测。从[部署与实机验证](docs/deployment.md)开始，硬件来源见[产品分析](docs/product-analysis.md)。
 
 ## 排程格式
 
@@ -48,7 +48,7 @@ pic/weekend.e6
 - 推荐图片：`.e6`，16 字节 `E6P1` 头加 192,000 字节打包像素，两个像素一字节，比 BMP 更省读取和转换时间。
 - PNG/JPEG 先在电脑转换；Pico 不运行 Pillow。素材工具不替代主控端排程、TXT 排版及屏幕驱动。
 - TXT 为 UTF-8，最多 8192 字节；支持换行、横向自动换行，制表符当 4 个空格。超出一屏或字体缺字会报错并保留原画面，不静默丢字。
-- 默认 32×32 点阵字体，含 ASCII、基本中日韩统一表意文字、常用标点与全角符号（21,256 字形，约 2.8 MB）。字库按需读取，不整套载入内存。生僻字/扩展区字符需用覆盖对应字符的原始字体重新生成。
+- 默认使用 Adobe 官方**思源黑体简体中文 Regular**（Source Han Sans SC），以原生 52 px 字形生成 **64×64 点阵字格**，含 ASCII、基本中日韩统一表意文字、常用标点与全角符号（21,256 字形，约 11 MB）。字库放 TF 卡，按需读取，字形缓存最多 8 KiB，不整套载入内存。生僻字/扩展区字符需用覆盖对应字符的原始字体重新生成。
 
 TXT 和 Markdown 第一次显示时，设备在**源文件同一目录**生成最终像素缓存，例如 `text/open.txt.e6cache`、`text/notice.md.e6cache`，每份 192,076 字节，含方向补偿和校验信息。此后直接读取打包像素，不查字库、不排版、不旋转，也不再逐次扫描整个字库。修改源文件内容、文字设置、方向或字库路径/大小/修改时间会重建；缓存损坏、缺失或写入中断时重新生成。源文本始终保留，缓存写入失败仍尝试显示。
 
@@ -60,7 +60,6 @@ TXT 和 Markdown 第一次显示时，设备在**源文件同一目录**生成�
 
 ```markdown
 # <span style="color: red">营业通知</span>
-
 欢迎光临
 ## 今日安排
 **营业时间：**09:00—18:00
@@ -80,6 +79,15 @@ TXT 和 Markdown 第一次显示时，设备在**源文件同一目录**生成�
 电池关机期间按键唤醒会重新启动主控，所以启动时间和运行时长按**本次上电**计算；状态页的时间为采样值。没有 RTC 闹钟标志的电池启动按手动唤醒处理。状态页等待期间保持主控供电，恢复正常画面后重新安排 RTC 并关机。电量使用单节锂电池电压曲线粗估，受负载、充电和温度影响，并非精确电量计。
 
 ![NEXT 状态页预览](docs/previews/status.png)
+
+## 低电量提示
+
+预估电量**低于 10%**时，正常 TXT、Markdown、BMP、E6 画面及 NEXT 状态页的右下角叠加红色电池图标，带小块白底以便在照片上识别。图标不写入原素材或文本像素缓存；即使排程文件不变，跨过 10% 阈值也会刷新，充电恢复后自动去掉图标。电量在主控唤醒和运行检查时采样，关机期间不会持续监测。
+
+电池供电时，电压低于 `low_battery_voltage`（默认 **3.1 V**），先关闭 RTC 闹钟，将整个显示内容替换为白底居中的红色空电池图标，等待屏幕刷新完成后关闭主控，留下提醒充电的画面。该画面直接绘制，不依赖 TF 卡素材或字库；成功显示后再次低压唤醒不重复刷新。接 USB 后重新恢复排程。最后一次刷新发生在低压阈值触发时，实际电池保护电路断电后已无法刷新；可按实测调高此阈值以预留刷新电量。
+
+![图片上的低电量提示](docs/previews/low-battery.png)
+![低压关机留下的画面](docs/previews/empty-battery.png)
 
 ## 调试与长期日志
 
@@ -112,14 +120,15 @@ python tools/prepare_image.py photo.jpg notice.bmp --dither
 # 与设备相同的文字排版预览
 python tools/render_preview.py examples/tf-card /text/open.txt open-preview.png
 python tools/render_preview.py examples/tf-card /text/notice.md notice-preview.png
+python tools/render_preview.py examples/tf-card /pic/weekend.e6 low-battery.png --battery-voltage 3.4
 # 从合法使用的字体生成所需字形，可缩小字库
 python tools/make_font.py font.ttf sign.e6f text1.txt text2.txt
-# 本仓库示例字库生成方式，TTC 第 2 号为简体中文面
-python tools/make_font.py /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc sign.e6f --font-index 2 --cjk
+# 从 Adobe 官方仓库下载 SourceHanSansSC-Regular.otf 后，生成本仓库字库
+python tools/make_font.py SourceHanSansSC-Regular.otf sign.e6f --cell 64 --size 52 --cjk
 ```
 
-`text.scale` 默认 2，长文本可改为 1。默认白底黑字、左对齐、24 px 边距。
-`make_font.py` 还会自动加入 NEXT 状态页所需文字；已有自制小字库需重新生成一次。
+`text.scale` 默认 **1**，直接绘制原生点阵。默认白底黑字、左对齐、24 px 边距；需要较小正文时可生成 `--cell 32 --size 26` 的字库，保持 `scale: 1`，状态页会自行放大至 64 px 字格。
+`make_font.py` 默认 `--cell 64 --size 52`，还会自动加入 NEXT 状态页所需文字。字体来源与 SIL OFL 许可见 [licenses](licenses/README.md)。升级已有设备需复制新 `fonts/sign.e6f` 和 `fonts/OFL.txt` 到 TF 卡，并把 `text.scale` 从 `2` 改为 `1`；文本缓存会自动重建。
 
 ![营业中内容的逻辑方向预览](docs/previews/open.png)
 
@@ -131,7 +140,7 @@ python tools/make_font.py /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 python -m unittest discover -s tests -v
 ```
 
-覆盖 cron、RTC、BUSY/SPI、图片与字体、像素缓存复用/损坏/失效、Markdown 六色排版、日志轮转/堆栈、NEXT 防抖、60 秒恢复最新排程及电池关机。独立 MicroPython 验证脚本是 `tests/micropython_smoke.py`，须提供可写的 TF 卡副本，不在真实卡上运行。该脚本已在 **320 KiB Unix MicroPython 堆**限制下通过，包含 Markdown、状态页和日志；这验证了缓冲复用与语言兼容，不能代替 RP2350 实测。
+覆盖 cron、RTC、BUSY/SPI、图片与字体、像素缓存复用/损坏/失效、Markdown 六色排版、日志轮转/堆栈、NEXT 防抖、60 秒恢复最新排程、低电量叠加及低压关机。独立 MicroPython 验证脚本是 `tests/micropython_smoke.py`，须提供可写的 TF 卡副本，不在真实卡上运行。该脚本已在 **320 KiB Unix MicroPython 堆**限制下通过，包含原生 64×64 思源黑体、Markdown、状态页、低电量图标和日志；这验证了缓冲复用与语言兼容，不能代替 RP2350 实测。
 
 电池模式最多每 6 小时检查远期事件，以应对 RTC 没有月/年比较字段。实机耗电和刷新速度待测，不承诺官方相框固件的同等续航或秒级切换。
 

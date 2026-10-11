@@ -18,7 +18,7 @@ DEFAULTS = {
     "battery_sleep": True, "wake_checkpoint_minutes": 360,
     "retry_minutes": 5, "low_battery_voltage": 3.1,
     "status_seconds": 60,
-    "text": {"scale": 2, "margin": 24, "line_spacing": 8,
+    "text": {"scale": 1, "margin": 24, "line_spacing": 8,
              "foreground": 0, "background": 1},
     "logging": log.DEFAULTS,
 }
@@ -161,12 +161,57 @@ def wake_target(now, next_minute, checkpoint_minutes=360, retry_minutes=None):
     return from_seconds(max(current + 2, target))
 
 
+def previous_content(state):
+    return state.get("previous_path") if state.get("path") in (
+        "@status", "@battery-empty") else state.get("path")
+
+
+def battery_voltage(board):
+    return sum(board.battery_voltage() for _ in range(16)) / 16
+
+
+def empty_battery_shutdown(board, rtc, display, buffer, config, voltage, root=None):
+    if board.usb() or voltage >= config["low_battery_voltage"]:
+        return False
+    log.warning("Battery empty; final warning then power-off; battery V:", voltage)
+    try:
+        rtc.disable_alarm()
+    except Exception as exc:
+        log.exception("Cannot disable low-battery RTC alarm", exc)
+    board.activity.value(1)
+    try:
+        from battery_warning import empty_battery_frame
+        state = load_state(root) if root is not None else {}
+        digest = "shown-" + str(config["rotation"])
+        if state.get("path") != "@battery-empty" or state.get("digest") != digest:
+            previous = previous_content(state)
+            # Pending forces a retry if power was lost during the final refresh.
+            if root is not None:
+                try:
+                    save_state(root, "@battery-empty", "pending", previous)
+                except Exception as exc:
+                    log.exception("Cannot save empty-battery pending state", exc)
+            display.display(empty_battery_frame(buffer, config["rotation"]))
+            if root is not None:
+                try:
+                    save_state(root, "@battery-empty", digest, previous)
+                except Exception as exc:
+                    log.exception("Cannot save empty-battery shown state", exc)
+    except Exception as exc:
+        log.exception("Final battery warning failed", exc)
+    finally:
+        board.screen_power.value(0)
+        board.activity.value(0)
+        board.power_off()
+    return not board.usb()
+
+
 class Controller:
     def __init__(self, root, config, display, buffer=None):
         self.root, self.config, self.display = root, config, display
         self.buffer = buffer
 
-    def update(self, schedule, now, fallback_path=None):
+    def update(self, schedule, now, fallback_path=None, voltage=None):
         started = ticks_ms()
         active = schedule.current(now)
         stage = report("select", started)
@@ -178,6 +223,8 @@ class Controller:
             return False
         path = card_path(path)
         from content import render_file
+        from battery_warning import low_charge, overlay_low_battery
+        warning = low_charge(voltage)
         frame = None
         try:
             digest = content_digest(self.root, path, self.config)
@@ -186,10 +233,15 @@ class Controller:
             is_text = path.lower().rsplit(".", 1)[-1] in ("txt", "md")
             if is_text:
                 from text_cache import text_frame
+                gc.collect()
                 frame, digest = text_frame(
                     self.root + path, self.root + relative_file(self.config["font"]),
                     self.config["text"], self.config["rotation"], digest, self.buffer)
                 stage = report("text_cache", stage)
+            # Cache pixels remain clean. The display state also tracks the badge,
+            # so crossing 10% refreshes even when the scheduled file is unchanged.
+            if warning:
+                digest += ":battery-low"
             if state.get("path") == path and state.get("digest") == digest:
                 log.info("Content unchanged:", path)
                 return False
@@ -198,6 +250,9 @@ class Controller:
                 frame = render_file(self.root + path, self.root + relative_file(self.config["font"]),
                                     self.config["text"], self.config["rotation"], self.buffer)
                 stage = report("render", stage)
+            if warning:
+                overlay_low_battery(frame, self.config["rotation"])
+                log.warning("Low battery overlay; battery V:", voltage)
             gc.collect()
             self.display.display(frame)
             stage = report("display", stage)
@@ -234,14 +289,17 @@ def show_status(board, rtc, display, buffer, root, config, session):
     rtc.disable_alarm()
     now = rtc.read_time()
     started, elapsed = session.sample(now)
-    voltage = sum(board.battery_voltage() for _ in range(16)) / 16
+    voltage = battery_voltage(board)
     previous = load_state(root)
-    previous_path = previous.get("previous_path") if previous.get("path") == "@status" else previous.get("path")
+    previous_path = previous_content(previous)
     if previous_path is None and config["default"] is None and read_schedule(root, config).current(now) is None:
         log.warning("No normal content is available to restore; retain existing screen")
         return False
     frame = render_status(now, started, elapsed, voltage, config["status_seconds"],
                           root + relative_file(config["font"]), config["rotation"], buffer)
+    from battery_warning import low_charge, overlay_low_battery
+    if low_charge(voltage):
+        overlay_low_battery(frame, config["rotation"])
     # Mark the transient screen before refresh, so power loss mid-refresh cannot
     # leave a cache claiming that the normal content is still on the panel.
     save_state(root, "@status", "temporary", previous_path)
@@ -268,10 +326,6 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None):
     last_minute = None
     while True:
         try:
-            if not board.usb() and board.battery_voltage() < config["low_battery_voltage"]:
-                log.warning("Battery low; charge over USB")
-                rtc.disable_alarm()
-                board.power_off()
             if not mounted:
                 started = ticks_ms()
                 board.mount_sd()
@@ -281,6 +335,9 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None):
                 config = read_config(ROOT)
                 log.configure(ROOT, config["logging"], rtc.read_time)
                 log.info("Started; USB:", board.usb(), "battery V:", board.battery_voltage())
+            voltage = battery_voltage(board)
+            if empty_battery_shutdown(board, rtc, display, buffer, config, voltage, ROOT):
+                return
             now = rtc.read_time()
             session.sample(now)
             if board.next_button.pressed() or session.pending:
@@ -308,8 +365,12 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None):
                 board.activity.value(1)
                 controller = Controller(ROOT, config, display, buffer)
                 state = load_state(ROOT)
-                fallback = state.get("previous_path") if state.get("path") == "@status" else None
-                controller.update(schedule, now, fallback)
+                fallback = previous_content(state)
+                controller.update(schedule, now, fallback, voltage)
+                # Account for voltage sag during a long full-panel refresh.
+                if empty_battery_shutdown(board, rtc, display, buffer, config,
+                                          battery_voltage(board), ROOT):
+                    return
                 # A NEXT press during rendering is latched by its GPIO IRQ.
                 if board.next_button.pressed():
                     session.pending = True
@@ -340,6 +401,13 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None):
             board.screen_power.value(0)
             board.activity.value(0)
             log.exception("Sign error", exc)
+            # The final warning also works when the TF card or RTC is invalid.
+            try:
+                if empty_battery_shutdown(board, rtc, display, buffer, config,
+                                          battery_voltage(board), ROOT if mounted else None):
+                    return
+            except Exception as power_error:
+                log.exception("Empty-battery power-off failed", power_error)
             # Retain the existing image and retry via RTC when battery-powered.
             if not session.active() and not board.usb() and config["battery_sleep"]:
                 try:

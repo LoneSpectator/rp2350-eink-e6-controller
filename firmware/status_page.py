@@ -100,7 +100,7 @@ def render_status(now, started, elapsed, voltage, seconds, font_path, rotation, 
     font = BitmapFont(font_path)
     try:
         draw_markdown(status_text(now, started, elapsed, voltage, seconds), font, canvas,
-                      {"margin": 24, "scale": 2, "line_spacing": 8})
+                      {"margin": 24, "scale": min(4, max(1, 64 // font.height)), "line_spacing": 8})
     finally:
         font.close()
     if rotation == 180:
