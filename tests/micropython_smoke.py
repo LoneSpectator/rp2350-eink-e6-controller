@@ -7,6 +7,8 @@ from framebuffer import FRAME
 from power_led import PowerIndicator
 from activity_led import ActivityIndicator, IndicatedBlockDevice
 from epaper import Epaper
+from next_button import NextButton
+from charge_history import ChargeHistory
 from app import Controller, empty_battery_shutdown, load_state, read_config, read_schedule, wake_target
 from calendar_time import from_minutes, to_minutes
 from content import BitmapFont, render_file
@@ -17,12 +19,13 @@ import sign_log as log
 root = sys.argv[1]
 now = (2026, 10, 12, 10, 0, 0)
 config = read_config(root)
-log.configure(root, {"debug": True}, lambda: now)
+log.configure(root, {"level": "DEBUG"}, lambda: now)
 schedule = read_schedule(root, config)
 assert schedule.current(now)[1].path == "/text/open.txt"
 assert from_minutes(schedule.next_minute(now)) == (2026, 10, 12, 18, 0, 0)
 assert from_minutes(Schedule.parse("0 0 29 2 * /leap.txt").next_minute(
     (2025, 3, 1, 0, 0, 0))) == (2028, 2, 29, 0, 0, 0)
+assert Schedule.parse("0 10 * * * /first.txt\n0 10 * * * /second.txt").current(now)[1].path == "/first.txt"
 assert wake_target((2026, 12, 31, 23, 59, 30),
                    to_minutes((2027, 1, 1, 0, 0, 0))) == (2027, 1, 1, 0, 0, 0)
 
@@ -70,7 +73,12 @@ text_cache.render_file = no_render
 assert not Controller(root, config, display, FRAME).update(markdown, now)
 text_cache.render_file = render
 from status_page import render_status
-assert render_status(now, now, 600, 3.75, 60, root + "/fonts/sign.e6f", 180, FRAME) is FRAME
+assert render_status(now, now, 3.75, root + "/fonts/status.e6f", 180, FRAME) is FRAME
+assert render_status(now, None, 3.75, root + "/fonts/status.e6f", 180, FRAME) is FRAME
+assert Controller(root, config, display, FRAME).show_file("/text/open.txt", 3.75, preview=True)
+assert load_state(root)["path"] == "@preview"
+assert load_state(root)["previous_path"] == "/text/notice.md"
+assert Controller(root, config, display, FRAME).update(markdown, now)
 from battery_warning import empty_battery_frame, overlay_low_battery
 # Battery overlays are applied after cache loading, and removed on recovery.
 text_cache.render_file = no_render
@@ -120,6 +128,22 @@ act.set_refreshing(False)
 assert act_pin.value() == 0
 assert card.ioctl(5, 0) == 512
 
+class ButtonPin(Indicator):
+    def irq(self, handler, trigger): self.handler = handler
+
+button_pin, button_clock = ButtonPin(0), ActivityClock()
+button = NextButton(button_pin, 12, button_clock)
+button_clock.now = 3000
+assert button.poll() == "long"
+button_pin.value(1)
+button_pin.handler(button_pin)
+assert button.poll() is None and not button.pending()
+
+history = ChargeHistory(root)
+assert not history.observe(True, True, 3.9, now)
+assert history.observe(True, False, 4.2, now)
+assert ChargeHistory(root).last_full == now
+
 pwr, vbus, charge = Indicator(), Indicator(1), Indicator(0)
 indicator = PowerIndicator(pwr, vbus, charge)
 assert pwr.value() == 1
@@ -162,6 +186,6 @@ try:
     raise ValueError("smoke warning traceback")
 except ValueError as exc:
     log.exception("Smoke exception", exc)
-assert os.stat(root + "/logs/debug.log")[6] > 0
-assert os.stat(root + "/logs/warnings.log")[6] > 0
-print("MicroPython smoke passed: cron, Source Han 64px, TXT/Markdown cache, status, batteries, PWR, ACT, logs")
+assert os.stat(root + "/logs/2026-10-12.log")[6] > 0
+assert os.listdir(root + "/logs") == ["2026-10-12.log"]
+print("MicroPython smoke passed: cron priority, Source Han 64/72px, caches, status/preview, charge history, batteries, LEDs, daily logs")

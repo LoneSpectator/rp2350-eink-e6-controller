@@ -157,7 +157,7 @@ class BatteryTests(unittest.TestCase):
                 class Board:
                     activity, screen_power, rtc_int = Pin(0), Pin(0), Pin(1)
                     i2c = None
-                    next_button = types.SimpleNamespace(pressed=lambda: False)
+                    next_button = types.SimpleNamespace(poll=lambda: None, pending=lambda: False)
                     def set_working(self, working): pass
                     def usb(self): return False
                     def battery_voltage(self): return voltage[0]

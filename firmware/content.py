@@ -120,8 +120,8 @@ class BitmapFont:
         try:
             magic, self.width, self.height, self.size, self.count, reserved = struct.unpack(
                 "<4sBBHII", exact_read(self.stream, 16))
-            if (magic != b"E6F1" or reserved or not 1 <= self.width <= 64 or
-                    not 1 <= self.height <= 64 or self.count > 100000 or
+            if (magic != b"E6F1" or reserved or not 1 <= self.width <= 72 or
+                    not 1 <= self.height <= 72 or self.count > 100000 or
                     self.size != ((self.width + 7) // 8) * self.height):
                 raise ValueError("invalid E6F1 font header")
             self.record_size = 5 + self.size

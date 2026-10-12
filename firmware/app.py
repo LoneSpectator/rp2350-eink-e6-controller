@@ -17,7 +17,8 @@ DEFAULTS = {
     "default": "/text/default.txt", "rotation": 180,
     "battery_sleep": True, "wake_checkpoint_minutes": 360,
     "retry_minutes": 5, "low_battery_voltage": 3.1,
-    "status_seconds": 60,
+    "next": {"font": "/fonts/status.e6f", "long_press_ms": 3000,
+             "status_seconds": 60, "preview_seconds": 60},
     "text": {"scale": 1, "margin": 24, "line_spacing": 8,
              "foreground": 0, "background": 1},
     "logging": log.DEFAULTS,
@@ -37,14 +38,16 @@ def relative_file(path):
 def read_config(root):
     config = dict(DEFAULTS)
     try:
-        with open(root + "/config.json", "r") as stream:
-            source = stream.read(4097)
+        path = root + "/config.json"
+        size = os.stat(path)[6]
+        if size > 4096:
+            raise ValueError("config.json too large")
+        with open(path, "r") as stream:
+            source = stream.read(size)
     except OSError as exc:
         if exc.args and exc.args[0] == 2:
             return config
         raise
-    if len(source) > 4096:
-        raise ValueError("config.json too large")
     custom = json.loads(source)
     if not isinstance(custom, dict):
         raise ValueError("config.json must be an object")
@@ -58,8 +61,7 @@ def read_config(root):
         card_path(config["default"])
     if config["rotation"] not in (0, 180) or not isinstance(config["battery_sleep"], bool):
         raise ValueError("invalid rotation or battery_sleep")
-    for key, upper in (("wake_checkpoint_minutes", 360), ("retry_minutes", 60),
-                       ("status_seconds", 600)):
+    for key, upper in (("wake_checkpoint_minutes", 360), ("retry_minutes", 60)):
         if not isinstance(config[key], int) or not 1 <= config[key] <= upper:
             raise ValueError(key + " out of range")
     if not isinstance(config["low_battery_voltage"], (int, float)) or not (
@@ -67,6 +69,19 @@ def read_config(root):
         raise ValueError("invalid low_battery_voltage")
     if not isinstance(config["text"], dict):
         raise ValueError("text settings must be an object")
+    if not isinstance(config["next"], dict):
+        raise ValueError("next settings must be an object")
+    button = dict(DEFAULTS["next"])
+    for key, value in config["next"].items():
+        if key not in button:
+            raise ValueError("unknown next setting: " + key)
+        button[key] = value
+    for key, lower, upper in (("long_press_ms", 1000, 10000), ("status_seconds", 1, 600),
+                              ("preview_seconds", 1, 600)):
+        if isinstance(button[key], bool) or not isinstance(button[key], int) or not lower <= button[key] <= upper:
+            raise ValueError("next." + key + " out of range")
+    config["next"] = button
+    relative_file(button["font"])
     config["logging"] = log.validate_settings(config["logging"])
     return config
 
@@ -168,7 +183,7 @@ def wake_target(now, next_minute, checkpoint_minutes=360, retry_minutes=None):
 
 def previous_content(state):
     return state.get("previous_path") if state.get("path") in (
-        "@status", "@battery-empty") else state.get("path")
+        "@status", "@preview", "@battery-empty") else state.get("path")
 
 
 def battery_voltage(board):
@@ -227,6 +242,10 @@ class Controller:
         if path is None:
             log.info("No prior cron event; retain screen")
             return False
+        return self.show_file(path, voltage)
+
+    def show_file(self, path, voltage=None, preview=False):
+        started = stage = ticks_ms()
         path = card_path(path)
         from content import render_file
         from battery_warning import low_charge, overlay_low_battery
@@ -249,7 +268,7 @@ class Controller:
             # so crossing 10% refreshes even when the scheduled file is unchanged.
             if warning:
                 digest += ":battery-low"
-            if state.get("path") == path and state.get("digest") == digest:
+            if not preview and state.get("path") == path and state.get("digest") == digest:
                 log.info("Content unchanged:", path)
                 return False
             gc.collect()
@@ -261,9 +280,14 @@ class Controller:
                 overlay_low_battery(frame, self.config["rotation"])
                 log.warning("Low battery overlay; battery V:", voltage)
             gc.collect()
+            if preview:
+                save_state(self.root, "@preview", "pending", previous_content(state))
             self.display.display(frame)
             stage = report("display", stage)
-            save_state(self.root, path, digest)
+            if preview:
+                save_state(self.root, "@preview", path + ":" + digest, previous_content(state))
+            else:
+                save_state(self.root, path, digest)
             report("state", stage)
         finally:
             del frame
@@ -285,26 +309,26 @@ def shut_down(board, rtc, target):
     if to_seconds(rtc.read_time()) >= to_seconds(target) or not board.rtc_int.value():
         raise OSError("wake time passed or RTC INT still low; leave MCU running")
     button = getattr(board, "next_button", None)
-    if button is not None and button.pressed():
+    if button is not None and button.pending():
         rtc.disable_alarm()
-        log.info("NEXT before power-off; keep MCU on for status page")
+        log.info("NEXT before power-off; keep MCU on to classify press")
         return False
     board.power_off()
 
 
-def show_status(board, rtc, display, buffer, root, config, session):
+def show_status(board, rtc, display, buffer, root, config, session, history):
     from status_page import render_status
     rtc.disable_alarm()
     now = rtc.read_time()
-    started, elapsed = session.sample(now)
     voltage = battery_voltage(board)
     previous = load_state(root)
     previous_path = previous_content(previous)
     if previous_path is None and config["default"] is None and read_schedule(root, config).current(now) is None:
         log.warning("No normal content is available to restore; retain existing screen")
         return False
-    frame = render_status(now, started, elapsed, voltage, config["status_seconds"],
-                          root + relative_file(config["font"]), config["rotation"], buffer)
+    seconds = config["next"]["status_seconds"]
+    frame = render_status(now, history.last_full, voltage,
+                          root + relative_file(config["next"]["font"]), config["rotation"], buffer)
     from battery_warning import low_charge, overlay_low_battery
     if low_charge(voltage):
         overlay_low_battery(frame, config["rotation"])
@@ -312,17 +336,24 @@ def show_status(board, rtc, display, buffer, root, config, session):
     # leave a cache claiming that the normal content is still on the panel.
     save_state(root, "@status", "temporary", previous_path)
     display.display(frame)
-    session.shown(config["status_seconds"])
-    log.info("Status page; restore in", config["status_seconds"], "seconds; battery V:", voltage)
+    session.shown(seconds)
+    log.info("Status page; restore in", seconds, "seconds; battery V:", voltage)
     return True
 
 
-def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=None):
+def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=None,
+        next_button=None):
     from board import Board
     from epaper import Epaper
     from rtc import PCF85063
     from status_page import StatusSession
-    board = Board() if power_indicator is None else Board(power_indicator=power_indicator)
+    from charge_history import ChargeHistory
+    options = {}
+    if power_indicator is not None:
+        options["power_indicator"] = power_indicator
+    if next_button is not None:
+        options["next_button"] = next_button
+    board = Board(**options)
     rtc = PCF85063(board.i2c)
     display = Epaper.for_board(board)
     if rtc_wake is None:
@@ -332,6 +363,9 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
     config = dict(DEFAULTS)
     mounted = False
     last_minute = None
+    preview = None
+    preview_index = 0
+    history = None
     while True:
         try:
             if not mounted:
@@ -341,6 +375,7 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 report("mount_sd", started)
                 mounted = True
                 log.configure(ROOT, DEFAULTS["logging"], rtc.read_time)
+                history = ChargeHistory(ROOT)
                 config = read_config(ROOT)
                 log.configure(ROOT, config["logging"], rtc.read_time)
                 log.info("Started; USB:", board.usb(), "battery V:", board.battery_voltage())
@@ -348,14 +383,59 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
             if empty_battery_shutdown(board, rtc, display, buffer, config, voltage, ROOT):
                 return
             now = rtc.read_time()
+            charging = getattr(board, "charging", None)
+            if history is not None:
+                history.observe(board.usb(), charging is not None and not charging.value(), voltage, now)
             session.sample(now)
-            if board.next_button.pressed() or session.pending:
+            board.next_button.long_press_ms = config["next"]["long_press_ms"]
+            event = board.next_button.poll()
+            if event == "long":
+                session.pending = False
+                session.finish()
+                config = read_config(ROOT)
+                log.configure(ROOT, config["logging"], rtc.read_time)
+                rtc.disable_alarm()
+                preview_schedule = read_schedule(ROOT, config)
+                preview = preview_schedule.entries
+                preview_index = 0
+                last_minute = None
+                if not preview or (previous_content(load_state(ROOT)) is None and
+                        config["default"] is None and preview_schedule.current(now) is None):
+                    log.warning("Cannot start preview: empty cron or no content to restore")
+                    preview = None
+                else:
+                    log.info("Preview started; entries:", len(preview))
+                del preview_schedule
+            elif event == "short" or (session.pending and not board.next_button.pending()):
                 board.set_working(True)
+                preview = None
                 session.pending = False
                 config = read_config(ROOT)
                 log.configure(ROOT, config["logging"], rtc.read_time)
-                show_status(board, rtc, display, buffer, ROOT, config, session)
+                show_status(board, rtc, display, buffer, ROOT, config, session, history)
                 continue
+            if board.next_button.pending():
+                time.sleep_ms(100)
+                continue
+            if preview is not None:
+                if session.active() and not session.expired():
+                    time.sleep_ms(100)
+                    continue
+                session.finish()
+                if preview_index < len(preview):
+                    entry = preview[preview_index]
+                    preview_index += 1
+                    log.info("Preview line", entry.line_number, ":", entry.path)
+                    try:
+                        Controller(ROOT, config, display, buffer).show_file(entry.path, voltage, preview=True)
+                    except Exception as exc:
+                        log.exception("Preview skipped: " + entry.path, exc)
+                        continue
+                    session.shown(config["next"]["preview_seconds"])
+                    continue
+                preview = None
+                last_minute = None
+                log.info("Preview complete; restore latest schedule")
             if session.active():
                 if not session.expired():
                     # The MCU remains powered and counts this wait itself.
@@ -381,8 +461,7 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                                           battery_voltage(board), ROOT):
                     return
                 # A NEXT press during rendering is latched by its GPIO IRQ.
-                if board.next_button.pressed():
-                    session.pending = True
+                if board.next_button.pending():
                     continue
                 # Use time *after* rendering. Reconcile if refresh crossed an event.
                 after = rtc.read_time()
@@ -393,7 +472,6 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
                 if config["battery_sleep"] and not board.usb():
                     target = wake_target(after, next_minute, config["wake_checkpoint_minutes"])
                     if shut_down(board, rtc, target) is False:
-                        session.pending = True
                         continue
                 else:
                     rtc.disable_alarm()
@@ -418,12 +496,12 @@ def run(buffer, boot_ms=None, key_at_boot=False, rtc_wake=None, power_indicator=
             except Exception as power_error:
                 log.exception("Empty-battery power-off failed", power_error)
             # Retain the existing image and retry via RTC when battery-powered.
-            if not session.active() and not board.usb() and config["battery_sleep"]:
+            if preview is None and not session.active() and not board.usb() and config["battery_sleep"]:
                 try:
                     now = rtc.read_time()
                     target = wake_target(now, None, retry_minutes=config["retry_minutes"])
                     if shut_down(board, rtc, target) is False:
-                        session.pending = True
+                        continue
                 except Exception as alarm_error:
                     log.exception("Cannot safely arm wake", alarm_error)
                     # Invalid RTC must be set over USB. Avoid silently draining battery.

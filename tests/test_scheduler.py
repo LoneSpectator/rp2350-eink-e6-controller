@@ -45,9 +45,24 @@ class CronTests(unittest.TestCase):
         self.assertEqual(cron.current((2026, 10, 12, 18, 0, 1))[1].path, "/closed.txt")
         self.assertEqual(cron.current((2026, 10, 12, 9, 5, 0))[1].path, "/open.txt")
 
-    def test_same_minute_last_line_wins(self):
+    def test_same_minute_first_line_wins(self):
         cron = Schedule.parse("* * * * * /a.txt\n# comment\n* * * * * /b.txt")
-        self.assertEqual(cron.current((2026, 10, 11, 12, 0, 0))[1].path, "/b.txt")
+        self.assertEqual(cron.current((2026, 10, 11, 12, 0, 0))[1].path, "/a.txt")
+
+    def test_collision_recovery_and_later_event_are_distinct(self):
+        cron = Schedule.parse("# Specific notices before ordinary content\n"
+                              "0 9 * * 1 /special.txt\n\n"
+                              "0 9 * * * /ordinary.txt\n"
+                              "0 10 * * * /later.txt")
+        for hour, minute in ((9, 0), (9, 30)):
+            event, entry = cron.current((2026, 10, 12, hour, minute, 0))
+            self.assertEqual(entry.path, "/special.txt")
+            self.assertEqual(entry.line_number, 2)
+            self.assertEqual(from_minutes(event), (2026, 10, 12, 9, 0, 0))
+        self.assertEqual(cron.current((2026, 10, 12, 10, 0, 0))[1].path, "/later.txt")
+        self.assertEqual(cron.current((2026, 10, 13, 9, 0, 0))[1].path, "/ordinary.txt")
+        self.assertEqual(from_minutes(cron.next_minute((2026, 10, 12, 9, 30, 0))),
+                         (2026, 10, 12, 10, 0, 0))
 
     def test_lists_ranges_and_steps(self):
         cron = Schedule.parse("5-55/10 9,17 * * 1-5 /a.txt")

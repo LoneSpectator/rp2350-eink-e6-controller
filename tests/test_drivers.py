@@ -9,6 +9,8 @@ from epaper import Epaper, FRAME_BYTES
 from rtc import PCF85063
 from app import shut_down
 from activity_led import ActivityIndicator
+import sign_log
+from unittest.mock import patch
 
 
 class I2C:
@@ -109,6 +111,11 @@ class SPI:
 
 class EpaperTests(unittest.TestCase):
     def setUp(self):
+        logger = sign_log.Logger()
+        logger.configure(None, {"level": "DEBUG"})
+        log_patch = patch.object(sign_log, "LOG", logger)
+        log_patch.start()
+        self.addCleanup(log_patch.stop)
         self.clock = Clock()
         self.cs, self.dc, self.reset, self.power = Pin(), Pin(), Pin(), Pin(0)
         self.busy = Busy(self.clock)
@@ -199,7 +206,7 @@ class ShutdownTests(unittest.TestCase):
             def set_working(self, working): pass
             class next_button:
                 @staticmethod
-                def pressed(): return True
+                def pending(): return True
             def usb(self): return False
             def sync(self): pass
             def power_off(self): raise AssertionError("NEXT press lost at power-off")

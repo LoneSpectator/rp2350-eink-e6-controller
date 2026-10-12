@@ -96,7 +96,7 @@ class PowerLedTests(unittest.TestCase):
                 indicator = self.indicator
                 board = types.SimpleNamespace(
                     i2c=None, activity=Pin(0), screen_power=Pin(0), rtc_int=Pin(1),
-                    next_button=types.SimpleNamespace(pressed=lambda: False),
+                    next_button=types.SimpleNamespace(poll=lambda: None, pending=lambda: False),
                     usb=lambda: usb, battery_voltage=lambda: 3.75, mount_sd=lambda: None,
                     set_working=indicator.set_working)
                 displays, reads, waits = [], [], []
@@ -169,7 +169,7 @@ class PowerLedTests(unittest.TestCase):
     def test_real_board_shares_startup_indicator_and_extinguishes_before_cutoff(self):
         pins = {}
         class MachinePin(Pin):
-            IN, OUT, PULL_UP, IRQ_FALLING = 0, 1, 2, 4
+            IN, OUT, PULL_UP, IRQ_FALLING, IRQ_RISING = 0, 1, 2, 4, 8
             def __new__(cls, identifier, *args, **kwargs):
                 if identifier not in pins:
                     pins[identifier] = super().__new__(cls)

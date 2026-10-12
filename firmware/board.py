@@ -5,13 +5,13 @@ from machine import ADC, I2C, Pin, SPI
 
 
 class Board:
-    def __init__(self, power_indicator=None):
+    def __init__(self, power_indicator=None, next_button=None):
         self.hold = Pin(18, Pin.OUT, value=1)
         self.screen_power = Pin(16, Pin.OUT, value=0)
         self.vbus = Pin(24, Pin.IN)
         self.key = Pin(19, Pin.IN, Pin.PULL_UP)
-        from status_page import NextButton
-        self.next_button = NextButton(self.key, Pin.IRQ_FALLING)
+        from next_button import NextButton
+        self.next_button = next_button or NextButton(self.key, Pin.IRQ_FALLING | Pin.IRQ_RISING)
         self.rtc_int = Pin(6, Pin.IN, Pin.PULL_UP)
         self.charging = Pin(17, Pin.IN, Pin.PULL_UP)
         self.activity = Pin(25, Pin.OUT, value=0)

@@ -39,7 +39,7 @@ python -m mpremote connect auto reset
 
 多设备连接时把 `auto` 换成实际串口，例如 `/dev/ttyACM0` 或 `COM3`。`set_time.py` 设置的是产品内的**外部 PCF85063**；`mpremote rtc` 通常设置主控内部时钟，不能替代它。程序启动不会将有效 RTC 重置为固定日期。
 
-已有设备升级时保留 TF 卡现有排程和素材，执行 `git pull`、`python tools/deploy.py --port COM8`、`python -m mpremote connect COM8 reset`。有效 RTC 无需重新校时。旧配置缺少新字段时采用默认值：`status_seconds=60`，长期警告日志开启、详细文件调试日志关闭。需要 Markdown 演示时，只复制 `text/notice.md`，再将它的路径加入自己的排程。
+已有设备升级时保留 TF 卡现有排程和素材，先 `git pull`，将 `examples/tf-card/fonts/status.e6f` 复制到 TF 的 `fonts/`。参照新的 `examples/tf-card/config.json` 修改卡上配置：删除顶层 `status_seconds`，添加 `next` 对象；删除 `logging.debug` / `logging.warnings`，使用 `logging.level`。其余个人设置保留。随后执行 `python tools/deploy.py --port COM8`、`python -m mpremote connect COM8 reset`。有效 RTC 无需重新校时；新配置不兼容旧字段。
 
 本次思源黑体升级还需把仓库中的 `examples/tf-card/fonts/sign.e6f`（约 11 MB）及同目录 `OFL.txt` 复制到 TF 卡的 `fonts/`，替换旧字库，并将卡上 `config.json` 的 `text.scale` 改为 **1**，其余个人设置保持原值。字体不上传至 Pico 内部闪存；`deploy.py` 只上传 Python 模块。字库大小改变会自动重建 TXT/Markdown 像素缓存。示例 `notice.md` 和 `pic/weekend.e6` 也已重新排版生成。
 
@@ -100,27 +100,33 @@ ACT 在屏幕初始化、像素传输、BUSY 刷新等待和休眠期间常亮�
 
 ## 日志设置与读取
 
-在 TF 根目录 `config.json` 的 `logging` 对象里设置 `debug: true` 开启详细文件日志；默认 `warnings: true` 保存长期警告与异常堆栈。`directory` 默认 `/logs`，`max_bytes` 默认 65,536，`backup_count` 默认 3；每类日志最多当前文件加指定份数的历史文件。格式为 `[当地 RTC 时间] [级别] 内容`，RTC 无效时使用 `uptime_ms`，串口使用相同格式。设置在下一次唤醒/分钟检查时生效。
+所有级别统一写入 TF 的 `/logs/YYYY-MM-DD.log`，按 RTC 当地日期跨日切换、同日重启追加。`logging.level` 同时过滤串口与文件，默认 `INFO`；`DEBUG` 包含调试与耗时，`WARNING` 只保留警告/异常，`ERROR` 只保留异常，`OFF` 关闭记录。`directory` 默认 `/logs`，`max_bytes` 默认 65,536，`backup_count` 默认 3；同日超限轮转为 `.log.1` 等，每日最多 256 KiB，旧日期不自动删除。格式为 `[当地 RTC 时间] [级别] 内容`；RTC 无效时使用 `uptime_ms` 并暂存 `undated.log`。设置在下一次唤醒/分钟检查或开始状态/预览时读取。
 
 USB 连接、退出其他占用串口的 REPL/Thonny 后，可从仍已挂卡的设备读取日志（`resume` 避免软重启丢失 `/sd` 挂载）：
 
 ```sh
-python -m mpremote connect COM8 resume fs cp :/sd/logs/debug.log ./debug.log
-python -m mpremote connect COM8 resume fs cp :/sd/logs/warnings.log ./warnings.log
+python -m mpremote connect COM8 resume fs cp :/sd/logs/2026-10-12.log ./2026-10-12.log
 python -m mpremote connect COM8 reset
 ```
 
-未产生相应日志时文件不会创建。也可以关机后把 TF 卡插入电脑读取 `/logs`。详细文件日志增加写卡和耗电，排查完后建议恢复 `debug: false`；文件写入异常会在串口显示，应用继续尝试运行。挂卡前发生的消息只能出现在串口。
+示例命令中的日期改成实际需读取的日期。没有达到配置级别的记录时文件不会创建；也可把 TF 卡插入电脑读取 `/logs`。排查时使用 `DEBUG`，长期电池运行可设 `WARNING`。文件写入异常在串口报告、应用继续运行；挂卡前消息只有串口输出。旧的 `debug` / `warnings` 配置不再接受。
 
 ## NEXT 状态页检查
 
-1. 正常画面上按 NEXT，确认居中“设备状态”标题下方以默认 64 像素字高显示“当前、启动、运行、电池、电量”五行，无“约”或恢复提示。官方 C 示例将 GP19 低电平当按键；USB 状态页流程已由用户日志确认，关机唤醒的对应关系继续实测。
-2. 从状态页刷新完成起计 60 秒，确认恢复**当时最新**排程。等待中再按 NEXT，应重新采样并重新计时。默认 `status_seconds=60` 可修改。
+1. 正常画面短按 NEXT，松开后显示状态页；确认居中标题下方有“当前、充电、待机”和电池行，共四行。独立 `fonts/status.e6f` 使用 72×72 字格、60 px 思源黑体字形，完整日期时间一行。电池行左侧为电压、右侧固定右对齐百分比，没有“电量”标签，右下角保留低电量图标空间。
+2. 从刷新完成起计 60 秒，确认恢复**当时最新**排程。再次短按重新采样/计时。配置 `next.status_seconds` 默认 `60`，范围 `1..600`。
 3. 刷新期间按键会先记录，处理后再展示状态页；不会中断正在执行的屏幕波形。
 4. 电池状态页等待期间主控保持运行，恢复画面后重新设置 RTC 并关机。无 RTC 闹钟标志的电池上电视为手动唤醒。
-5. 时间与电压在生成页面时采样，不每秒刷新；启动时间/时长属于本次上电。粗估电量采用通用单节锂电池电压曲线，不能替代精确电量计，充电和负载会影响读数。当前不检测电池是否接入；USB 供电下拔掉电池，充电电路可能维持高采样电压，从而显示 100%。切断全部供电后墨水屏保留原值。
+5. “充电”为上一次观察到充满电的时间；USB 下先看到 GP17 低电平充电，之后非充电且电压至少 4.1 V 才记录。`.charge-state.json` 在 TF 上持久保存，临时文件支持断电恢复；待机由 RTC 当前时间减去充满时间，跨关机/重启累计。初次使用或程序未观察到充满时显示“未知”，不会把满电启动当成充满时间。检测在主循环进行，刷新会延后采样；调时早于记录时待机显示“未知”。
+6. 时间、电压及百分比在生成页面时采样，不每秒刷新；电量仍是电压曲线估计。USB 供电下拔掉电池仍可能显示 100%，程序没有独立电池接入检测；切断全部供电后墨水屏保留原值。
 
 只有同时没有默认内容、历史排程和之前已知正常文件时，程序会保留原画面并记录警告，避免显示状态页后无法恢复。
+
+## NEXT 长按素材检查
+
+按住 NEXT 至少 3 秒（`next.long_press_ms=3000`）按 cron 文件行顺序显示全部有效行的素材，忽略排程日期时间，包含重复路径。每项从刷新完成起停留 60 秒（`next.preview_seconds=60`）；失败素材记录异常并跳过，空 cron 保留日常画面。遍历结束恢复当时最新排程，电池模式之后才设 RTC 并关机。检查期间保持主控供电，PWR 常亮，ACT 按刷新/读卡指示。短按进入状态页，长按从头重新检查。
+
+测试时把只在未来时间或不可能日期匹配的文件也加入 cron，确认仍会预览；在预览期间跨过日常排程的时间，确认结束后恢复最新内容。启动 5 秒窗口和屏幕刷新期间的按键边沿会记录，长按不会同时触发短按状态页；刷新完成后再执行对应操作。重启/断电后直接恢复日常排程，不续播临时检查。
 
 ## PWR 指示检查
 

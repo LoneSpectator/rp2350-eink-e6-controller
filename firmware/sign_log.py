@@ -1,10 +1,11 @@
-"""Console diagnostics and bounded TF-card debug/warning logs."""
+"""Level-filtered console diagnostics and bounded daily TF-card logs."""
 import io
 import os
 import sys
 import time
 
-DEFAULTS = {"debug": False, "warnings": True, "directory": "/logs",
+LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "OFF": 100}
+DEFAULTS = {"level": "INFO", "directory": "/logs",
             "max_bytes": 65536, "backup_count": 3}
 
 
@@ -15,9 +16,10 @@ def validate_settings(settings):
     for key in settings:
         if key not in DEFAULTS:
             raise ValueError("unknown logging setting: " + key)
-    result.update(settings)
-    if not isinstance(result["debug"], bool) or not isinstance(result["warnings"], bool):
-        raise ValueError("logging debug/warnings must be boolean")
+        result[key] = settings[key]
+    if not isinstance(result["level"], str) or result["level"].upper() not in LEVELS:
+        raise ValueError("logging level must be DEBUG, INFO, WARNING, ERROR or OFF")
+    result["level"] = result["level"].upper()
     path = result["directory"]
     if not isinstance(path, str) or not path.startswith("/") or any(
             part in ("", ".", "..") for part in path[1:].split("/")) or any(
@@ -104,19 +106,16 @@ class Logger:
             os.sync()
 
     def record(self, level, parts):
+        if LEVELS[level] < LEVELS[self.settings["level"]]:
+            return
         message = " ".join(str(part) for part in parts)
         stamp = self.timestamp()
         record = "[%s] [%s] %s\n" % (stamp, level, message)
         print(record.rstrip("\n"))
         if self.root is None or self.failed:
             return
-        targets = []
-        if self.settings["debug"]:
-            targets.append("debug")
-        if self.settings["warnings"] and level in ("WARNING", "ERROR"):
-            targets.append("warnings")
-        if not targets:
-            return
+        # Use the same RTC sample for the record and filename at midnight.
+        name = "undated" if stamp.startswith("uptime_ms=") else stamp[:10]
         # Bound even an unusually large traceback without exceeding one file.
         limit = min(16384, self.settings["max_bytes"] // 4 - 64)
         if len(message) > limit:
@@ -125,13 +124,14 @@ class Logger:
         try:
             if not self.ready:
                 self.make_directory()
-            for name in targets:
-                self.append(name, record)
+            self.append(name, record)
         except (OSError, ValueError) as exc:
             self.failed = True
-            print("[%s] [WARNING] Log write failed: %s" % (self.timestamp(), exc))
+            print("[%s] [ERROR] Log write failed: %s" % (stamp, exc))
 
     def exception(self, message, exc):
+        if LEVELS["ERROR"] < LEVELS[self.settings["level"]]:
+            return
         if hasattr(sys, "print_exception"):
             stream = io.StringIO()
             sys.print_exception(exc, stream)

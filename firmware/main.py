@@ -17,6 +17,7 @@ try:
     from app import run
     run(FRAME, boot_ms=globals().get("_boot_ms"),
         key_at_boot=globals().get("_next_at_boot", False),
-        rtc_wake=globals().get("_rtc_alarm_at_boot"), power_indicator=power_indicator)
+        rtc_wake=globals().get("_rtc_alarm_at_boot"), power_indicator=power_indicator,
+        next_button=globals().get("_next_button"))
 finally:
     power_indicator.set_working(False)

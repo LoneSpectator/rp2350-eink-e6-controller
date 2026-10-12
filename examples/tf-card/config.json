@@ -7,7 +7,12 @@
     "wake_checkpoint_minutes": 360,
     "retry_minutes": 5,
     "low_battery_voltage": 3.1,
-    "status_seconds": 60,
+    "next": {
+        "font": "/fonts/status.e6f",
+        "long_press_ms": 3000,
+        "status_seconds": 60,
+        "preview_seconds": 60
+    },
     "text": {
         "scale": 1,
         "margin": 24,
@@ -16,8 +21,7 @@
         "background": 1
     },
     "logging": {
-        "debug": false,
-        "warnings": true,
+        "level": "INFO",
         "directory": "/logs",
         "max_bytes": 65536,
         "backup_count": 3

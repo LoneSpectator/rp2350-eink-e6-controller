@@ -119,7 +119,7 @@ class ActivityLedTests(unittest.TestCase):
 
     def test_real_board_wraps_mount_and_card_initialization_failure(self):
         class MachinePin(Pin):
-            IN, OUT, PULL_UP, IRQ_FALLING = 0, 1, 2, 4
+            IN, OUT, PULL_UP, IRQ_FALLING, IRQ_RISING = 0, 1, 2, 4, 8
             def __init__(self, identifier, *args, **kwargs):
                 super().__init__(kwargs.get("value", 1))
         machine = types.SimpleNamespace(Pin=MachinePin, ADC=lambda pin: None,

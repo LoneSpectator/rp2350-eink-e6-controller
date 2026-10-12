@@ -13,8 +13,8 @@ from status_page import status_text
 
 
 def build_font(font_path, output, characters, cell=64, size=52, font_index=0):
-    if not 8 <= cell <= 64 or not 1 <= size <= cell:
-        raise ValueError("cell must be 8..64; font size must fit the cell")
+    if not 8 <= cell <= 72 or not 1 <= size <= cell:
+        raise ValueError("cell must be 8..72; font size must fit the cell")
     font = ImageFont.truetype(str(font_path), size, index=font_index)
     chars = sorted(set(characters) - {"\n", "\r", "\t"}, key=ord)
     output = Path(output)
@@ -51,7 +51,8 @@ def main():
     args = parser.parse_args()
     chars = "".join(chr(n) for n in range(32, 127)) + args.chars
     # A reduced font must also render the device's built-in NEXT status page.
-    chars += status_text((2026, 1, 1, 0, 0, 0), (2026, 1, 1, 0, 0, 0), 0, 3.2, 60)
+    chars += status_text((2026, 1, 1, 0, 0, 0), (2026, 1, 1, 0, 0, 0), 3.2)
+    chars += status_text((2026, 1, 1, 0, 0, 0), None, 3.2)
     for path in args.text_files:
         chars += path.read_text(encoding="utf-8-sig")
     if args.cjk:

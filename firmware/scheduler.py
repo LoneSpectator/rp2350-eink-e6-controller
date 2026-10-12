@@ -114,8 +114,8 @@ class Schedule:
         best = None
         for entry in self.entries:
             event = entry.occurrence(minute, -1)
-            if event is not None and (best is None or (event, entry.line_number) >
-                                     (best[0], best[1].line_number)):
+            if event is not None and (best is None or event > best[0] or
+                                     (event == best[0] and entry.line_number < best[1].line_number)):
                 best = event, entry
         return best
 

@@ -14,7 +14,8 @@ import app
 import sign_log
 from calendar_time import from_seconds, to_seconds
 from content import render_file
-from status_page import NextButton, StatusSession, estimate_charge, status_text
+from status_page import StatusSession, estimate_charge, status_text, render_status
+from next_button import NextButton
 from power_led import PowerIndicator
 
 
@@ -53,18 +54,65 @@ class StatusTests(unittest.TestCase):
     def test_button_debounce_boot_press_and_press_during_busy_work(self):
         clock, pin = Clock(), Pin(0)
         button = NextButton(pin, 4, clock)
-        self.assertTrue(button.pressed())
-        self.assertFalse(button.pressed())
-        pin.handler(pin)
-        self.assertTrue(button.pressed())
-        clock.now += 10
-        pin.handler(pin)
-        self.assertFalse(button.pressed())
+        self.assertTrue(button.pending())
+        self.assertIsNone(button.poll())
         clock.now += 100
+        pin.value(1)
+        pin.handler(pin)
+        self.assertEqual(button.poll(), "short")
+        self.assertIsNone(button.poll())
+        clock.now += 10
+        pin.value(0)
+        pin.handler(pin)  # Bounce cannot become a new press.
+        self.assertFalse(button.pending())
+        pin.value(1)
+        clock.now += 100
+        pin.value(0)
+        pin.handler(pin)
+        clock.now += 3100
+        pin.value(1)
         pin.handler(pin)
         clock.now += 30000  # Latched until rendering completes.
-        self.assertTrue(button.pressed())
-        self.assertFalse(button.pressed())
+        self.assertEqual(button.poll(), "long")
+        self.assertIsNone(button.poll())
+
+    def test_held_long_press_fires_once_and_release_does_not_trigger_status(self):
+        clock, pin = Clock((1 << 30) - 1000), Pin(1)
+        button = NextButton(pin, 12, clock)
+        pin.value(0)
+        pin.handler(pin)
+        clock.now += 2999
+        self.assertIsNone(button.poll())
+        clock.now += 1
+        self.assertEqual(button.poll(), "long")
+        clock.now += 60000
+        self.assertIsNone(button.poll())
+        pin.value(1)
+        pin.handler(pin)
+        self.assertIsNone(button.poll())
+        self.assertFalse(button.pending())
+
+    def test_status_font_is_larger_and_percentage_unit_has_fixed_position(self):
+        from content import BitmapFont
+        path = Path(__file__).resolve().parents[1] / "examples/tf-card/fonts/status.e6f"
+        font = BitmapFont(str(path))
+        self.assertEqual((font.width, font.height), (72, 72))
+        unit_x = 800 - 24 - font.glyph("%")[0]
+        font.close()
+        samples = []
+        for voltage in (3.3, 3.75, 4.2):
+            frame = render_status((2026, 10, 12, 23, 59, 59), (2026, 10, 11, 23, 59, 59),
+                                  voltage, str(path), 0, bytearray(192000))
+            unit = []
+            for y in range(348, 420):
+                for x in range(unit_x, 776):
+                    value = frame[(y * 800 + x) // 2]
+                    unit.append((value & 15 if x & 1 else value >> 4) != 1)
+            samples.append(unit)
+            self.assertEqual(set(frame[420 * 400:]), {0x11})  # Clear space for the corner icon.
+        self.assertTrue(any(samples[0]))
+        self.assertEqual(samples[0], samples[1])
+        self.assertEqual(samples[1], samples[2])
 
     def test_timer_starts_after_display_restarts_and_survives_tick_wrap(self):
         clock = Clock((1 << 30) - 500)
@@ -87,12 +135,18 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(estimate_charge(3.75), 50)
         levels = [estimate_charge(value / 100) for value in range(280, 451)]
         self.assertEqual(levels, sorted(levels))
-        text = status_text((2026, 10, 11, 21, 30, 0), (2026, 10, 10, 20, 0, 0),
-                           91800, 3.75, 60)
+        text = status_text((2026, 10, 11, 21, 30, 0), (2026, 10, 10, 20, 0, 0), 3.75)
         for value in ("2026-10-11 21:30:00", "2026-10-10 20:00:00", "1d 01:30:00",
                       "3.75 V", "50%"):
             self.assertIn(value, text)
-        self.assertEqual(len(text.splitlines()[1:]), 5)
+        self.assertEqual(len(text.splitlines()[1:]), 4)
+        self.assertIn("充电：", text)
+        self.assertIn("待机：", text)
+        self.assertNotIn("启动", text)
+        self.assertNotIn("运行", text)
+        self.assertNotIn("电量", text)
+        self.assertIn("3.75 V    50%", text.splitlines()[-1])
+        self.assertIn("充电：未知\n待机：未知", status_text((2026, 10, 11, 21, 30, 0), None, 3.75))
 
     def test_usb_and_battery_status_restore_latest_schedule_after_sixty_seconds(self):
         for usb in (True, False):
@@ -101,17 +155,18 @@ class StatusTests(unittest.TestCase):
                 (root / "fonts").mkdir()
                 source = Path(__file__).resolve().parents[1] / "examples/tf-card"
                 shutil.copyfile(source / "fonts/sign.e6f", root / "fonts/sign.e6f")
+                shutil.copyfile(source / "fonts/status.e6f", root / "fonts/status.e6f")
                 (root / "a.txt").write_text("OPEN 营业中", encoding="utf-8")
                 (root / "b.txt").write_text("CLOSED 已结束", encoding="utf-8")
                 (root / "cron").write_text("0 9 * * * /a.txt\n1 9 * * * /b.txt")
-                settings = {"rotation": 0, "text": {"scale": 1}, "logging": {"debug": True}}
+                settings = {"rotation": 0, "text": {"scale": 1}, "logging": {"level": "DEBUG"}}
                 (root / "config.json").write_text(json.dumps(settings))
                 clock = Clock()
                 baseline = to_seconds((2026, 10, 11, 9, 0, 0))
                 class Board:
                     activity, screen_power, rtc_int = Pin(0), Pin(0), Pin(1)
                     i2c = None
-                    next_button = types.SimpleNamespace(pressed=lambda: False)
+                    next_button = types.SimpleNamespace(poll=lambda: None, pending=lambda: False)
                     off_times = []
                     def __init__(self):
                         self.power_indicator = PowerIndicator(Pin(0), Pin(int(usb)), Pin(int(not usb)))
