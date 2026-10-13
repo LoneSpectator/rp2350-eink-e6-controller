@@ -2,7 +2,7 @@
 
 在 Waveshare **PhotoPainter (B)** 的 Pico 2 主控上运行 **MicroPython**。从 TF 卡读取类似 cron 的排程，用图片或 UTF-8 TXT 替代 cron 命令。使用产品已有电池和 PCF85063 RTC 定时唤醒；完成更新后关闭主控，墨水屏保持画面。
 
-用户已在实机确认基本显示、RTC 校时和电池定时循环刷新，USB 日志确认了文本缓存命中、NEXT 状态页及 60 秒恢复流程。程序通过云端单元测试及 MicroPython v1.26.0 Unix 验证，思源黑体、低电量画面和 NEXT 电池唤醒继续实测。从[部署与实机验证](docs/deployment.md)开始，硬件来源见[产品分析](docs/product-analysis.md)。
+已投入日常使用，显示与排版、cron 排程、RTC 校时与电池定时唤醒、文本缓存、NEXT 状态页与长按素材检查、日志及指示灯功能目前运行正常。低电量提示、低压关机和再次充满电后的时间记录尚待完整电池循环验证。已通过自动化测试及 MicroPython v1.26.0 Unix 验证。安装步骤见[部署与实机验证](docs/deployment.md)，硬件与实现依据见[产品分析](docs/product-analysis.md)。
 
 ## 排程格式
 
@@ -158,8 +158,15 @@ python tools/make_font.py SourceHanSansSC-Regular.otf sign.e6f --cell 64 --size 
 python -m unittest discover -s tests -v
 ```
 
-覆盖 cron、RTC、BUSY/SPI、图片与字体、像素缓存复用/损坏/失效、Markdown 六色排版、日志轮转/堆栈、NEXT 防抖、60 秒恢复最新排程、低电量叠加及低压关机。独立 MicroPython 验证脚本是 `tests/micropython_smoke.py`，须提供可写的 TF 卡副本，不在真实卡上运行。该脚本已在 **320 KiB Unix MicroPython 堆**限制下通过，包含原生 64×64 思源黑体、Markdown、状态页、低电量图标和日志；这验证了缓冲复用与语言兼容，不能代替 RP2350 实测。
+截至 **2026-10-13**，验证状态如下：
 
-电池模式最多每 6 小时检查远期事件，以应对 RTC 没有月/年比较字段。实机耗电和刷新速度待测，不承诺官方相框固件的同等续航或秒级切换。
+- **自动化测试：** 已通过 97 项测试，覆盖 cron 冲突优先级与恢复、RTC、BUSY/SPI、图片与字体、像素缓存、Markdown 六色排版、日期日志与级别过滤、NEXT 防抖与长按预览、60 秒恢复排程、充电记录持久化、低电量叠加及低压关机。
+- **MicroPython 验证：** `tests/micropython_smoke.py` 已在 v1.26.0 Unix、**320 KiB 堆**限制下通过，覆盖 64/72 px 思源黑体、缓存、状态页与预览、充电记录、指示灯和日期日志。脚本需使用可写的 TF 卡副本。
+- **实机日常使用：** 图片与中英文 TXT/Markdown、思源黑体显示、排程与 RTC 电池唤醒、缓存、NEXT 状态页与 60 秒恢复、长按逐行素材检查、日志和运行状态指示目前运行正常。
+- **待完成的实机验证：** 低于 10% 时的电池图标、低压关机前的全屏提醒，以及再次充满电后的时间记录与待机累计。这些分支已通过自动化验证，尚未经历完整的低电量至充满电循环。
+
+电池模式最多每 6 小时检查远期事件，以应对 RTC 没有月/年比较字段。既有刷新耗时记录见部署文档；尚无完整放电周期的续航与电量曲线标定数据。
 
 第三方驱动及字体说明见 [licenses/](licenses/README.md)。
+
+> **AI 编程声明：** 本项目的程序开发由 AI（OpenAI Codex）完成，需求确定和实机验证由我负责。

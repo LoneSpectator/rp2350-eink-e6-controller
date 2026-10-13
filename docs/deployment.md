@@ -1,10 +1,10 @@
 # PhotoPainter (B) 部署与实机验证
 
-目标为官方示例的 `PICO_BOARD=pico2` 引脚布局。用户已确认实机基础显示、外部 RTC 校时和电池循环刷新正常，随后日志确认了文本缓存命中、NEXT 状态页和 60 秒恢复流程。Markdown 色彩和电池状态页的按键唤醒仍需实测；云端没有连接实物。
+目标为官方示例的 `PICO_BOARD=pico2` 引脚布局。已在 PhotoPainter (B) 上投入日常使用，显示与排版、RTC 校时与电池定时唤醒、缓存、NEXT 状态页与长按素材检查、日志及运行状态指示目前正常。低电量提醒、低压关机和再次充满电后的时间记录尚待完整电池循环验证。自动化及实机验证状态见 [README](../README.md#程序与验证)。
 
 ## 准备与恢复
 
-1. 保留原 TF 卡内容，准备匹配产品的官方恢复 UF2。上传 ZIP 中 `extra_uf2` 是候选恢复文件，本项目未在你的设备上验证这些二进制；优先使用你已确认能运行的官方版本。
+1. 备份 TF 卡内容及当前可用的官方 UF2，准备恢复固件。官方示例包 `PhotoPainter_B.zip` 的 `extra_uf2` 包含不同刷新间隔版本，选择时核对产品型号与刷新间隔。
 2. 下载官方 [MicroPython Pico 2 固件](https://micropython.org/download/RPI_PICO2/)，本项目语言验证版本为 **v1.26.0**。不要刷入 RP2040 Pico 或 Pico 2 W 固件。官方板型固件不包含 PhotoPainter 驱动，由本仓库 Python 模块适配。
 3. 按产品说明进入 BOOTSEL，连接 USB 后将对应 UF2 拖入启动盘。该操作替换原应用固件；恢复时重新进入 BOOTSEL 并刷回已准备的官方 UF2。
 4. 首次上传、校时和检查使用 USB 供电；成功后再拔掉 USB 验证电池模式。
@@ -41,7 +41,7 @@ python -m mpremote connect auto reset
 
 已有设备升级时保留 TF 卡现有排程和素材，先 `git pull`，将 `examples/tf-card/fonts/status.e6f` 复制到 TF 的 `fonts/`。参照新的 `examples/tf-card/config.json` 修改卡上配置：删除顶层 `status_seconds`，添加 `next` 对象；删除 `logging.debug` / `logging.warnings`，使用 `logging.level`。其余个人设置保留。随后执行 `python tools/deploy.py --port COM8`、`python -m mpremote connect COM8 reset`。有效 RTC 无需重新校时；新配置不兼容旧字段。
 
-本次思源黑体升级还需把仓库中的 `examples/tf-card/fonts/sign.e6f`（约 11 MB）及同目录 `OFL.txt` 复制到 TF 卡的 `fonts/`，替换旧字库，并将卡上 `config.json` 的 `text.scale` 改为 **1**，其余个人设置保持原值。字体不上传至 Pico 内部闪存；`deploy.py` 只上传 Python 模块。字库大小改变会自动重建 TXT/Markdown 像素缓存。示例 `notice.md` 和 `pic/weekend.e6` 也已重新排版生成。
+从旧字库升级至思源黑体时，将 `examples/tf-card/fonts/sign.e6f`（约 11 MB）及同目录 `OFL.txt` 复制到 TF 卡的 `fonts/`，并将 `text.scale` 设为 **1**。字体保存在 TF 卡；`deploy.py` 上传 Python 模块至 Pico 内部闪存。字库大小改变会自动重建 TXT/Markdown 像素缓存。示例 `notice.md` 和 `pic/weekend.e6` 使用当前思源黑体排版。
 
 排程文件统一命名为 **`cron`**，没有扩展名。已有 TF 卡需将旧排程文件重命名为 `cron`，并把 `config.json` 中的 `cron` 设置改为 `"/cron"`，保留原排程内容，再上传新版程序并重启。
 
@@ -76,7 +76,7 @@ PCF85063 闹钟只比较日/时/分/秒，不能比较月/年。远期排程默�
 - 以相同内容重复排程，确认输出 `Content unchanged`，屏幕不重复刷新。
 - 测试跨午夜，以及错过前一时间后手动重启，确认恢复最近内容。
 
-关机后没有到时唤醒：接 USB 读取 RTC 时间和 `0x0B..0x0F` 闹钟寄存器，检查 GP6 INT、GP18 保持及 RTC 电源电路。云端模拟不能证明硬件行为。
+关机后没有到时唤醒：接 USB 读取 RTC 时间和 `0x0B..0x0F` 闹钟寄存器，检查 GP6 INT、GP18 保持及 RTC 电源电路。
 
 USB 常供电时主控保持运行，约每 100 ms 观察按键和时间、每个新分钟读取配置和内容。显示仍需完成屏幕全屏刷新；刷新跨过新排程时，程序再次检查并更新至最新内容。
 
@@ -84,7 +84,7 @@ USB 常供电时主控保持运行，约每 100 ms 观察按键和时间、每�
 
 需要快速验证时，把 [examples/fast-switch/cron](../examples/fast-switch/cron) 复制到 TF 根目录替换 `cron`，保留原排程副本，并确认配置为 `"cron": "/cron"`。该样本每分钟切换一次营业 TXT、休息 TXT、彩色 Markdown、E6 图片，四分钟一轮；使用仓库自带的 `fonts/`、`text/`、`pic/` 素材。重启后立即显示当前分钟对应内容，之后按整分钟切换。
 
-保持你当前两条 TXT 排程，分别显示一遍后，TF 卡上应出现 `text/open.txt.e6cache`、`text/closed.txt.e6cache`，每份 192,076 字节。后续串口应输出 `Text cache hit`，不再出现 `text_render`。源文件、排版、方向或字库大小/修改时间变化时输出 `Text cache rebuild`。删除缓存可以强制重建；更新字库时若保留了原大小及时间戳，也需要删除缓存。
+以 `text/open.txt`、`text/closed.txt` 两项 TXT 排程检查缓存：分别显示一遍后，TF 卡上应出现同目录 `.e6cache` 文件，每份 192,076 字节。设置 `logging.level=DEBUG` 后，缓存命中输出 `Text cache hit`，不再出现 `text_render`；源文件、排版、方向或字库大小/修改时间变化时输出 `Text cache rebuild`。删除缓存可以强制重建；更新字库时若保留了原大小及时间戳，也需要删除缓存。
 
 Markdown 语法与六色文字见 [README](../README.md)，可先预览：
 
@@ -96,7 +96,7 @@ ACT 在屏幕初始化、像素传输、BUSY 刷新等待和休眠期间常亮�
 
 日志中 `fingerprint` 是输入检查，`text_cache` 是缓存读取或重建，`text_render` 只在重建时出现；`panel_init`、`frame_upload`、`panel_power_on`、`panel_refresh`、`panel_sleep` 分别对应屏幕阶段，`display` 是整个驱动过程，不能与内部阶段相加。屏幕驱动维持官方正常全屏波形，像素缓存缩短准备时间。
 
-用户提供的 USB 实机日志中，旧 32×32 字库的 TXT 首次排版约 4.47–5.17 秒、缓存读取约 1.76 秒、屏幕 `panel_refresh` 约 19.09 秒；缓存命中后完整内容切换约 21.76 秒。这些是该设备该次运行的结果，主要耗时已在屏幕刷新阶段；更换原生 64×64 思源黑体后的首次排版耗时需重新实测，缓存命中仍绕过字库读取与绘制。
+既有 USB 实机日志记录：旧 32×32 字库的 TXT 首次排版约 4.47–5.17 秒、缓存读取约 1.76 秒、屏幕 `panel_refresh` 约 19.09 秒，缓存命中后完整切换约 21.76 秒。这组数据对应旧字库和当时的运行条件；当前思源黑体的准备耗时可能不同，缓存命中仍会绕过字库读取与绘制。
 
 ## 日志设置与读取
 
